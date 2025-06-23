@@ -22,6 +22,7 @@ func NewMiddleware(logger api.Logger, config *Config) *Middleware {
 
 func (m *Middleware) Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
+
 		start := time.Now()
 
 		traceID := c.GetHeader("X-Trace-ID")
@@ -65,14 +66,18 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 
 func (m *Middleware) CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
+
+		// Set CORS headers
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-ID, X-Version")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Trace-ID, X-Version")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
+
 		c.Next()
 	}
 }
@@ -120,16 +125,32 @@ func (m *Middleware) Recovery() gin.HandlerFunc {
 }
 
 func (m *Middleware) Apply(router *gin.Engine) {
+
+	fmt.Println("**************************************")
+	fmt.Println("Registering Middlewares:")
+
 	if m.config.Environment != "prod" {
+		fmt.Println("\tPrettyLog")
 		router.Use(m.PrettyLog())
 	}
+	fmt.Println("\tLogger")
 	router.Use(m.Logger())
+
+	fmt.Println("\tCORS")
 	router.Use(m.CORS())
+
+	fmt.Println("\tMaxBodySize")
 	router.Use(m.MaxBodySize(m.config.MaxRequestSize))
+
+	fmt.Println("\tRecovery")
 	router.Use(m.Recovery())
+
 	if m.config.Environment == "dev" || m.config.EnableProfiling {
+		fmt.Println("\tProfiling")
 		router.Use(m.Profiling())
 	}
+
+	fmt.Println("**************************************")
 }
 
 func getLoggerFromContext(c *gin.Context) api.Logger {
