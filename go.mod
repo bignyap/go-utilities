@@ -6,14 +6,19 @@ require (
 	github.com/IBM/sarama v1.45.2
 	github.com/caarlos0/env v3.5.0+incompatible
 	github.com/gin-gonic/gin v1.10.1
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gojek/heimdall v5.0.2+incompatible
 	github.com/gojek/heimdall/v7 v7.0.3
 	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.7.5
+	github.com/lib/pq v1.10.9
+	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/DataDog/datadog-go v3.7.1+incompatible // indirect
 	github.com/afex/hystrix-go v0.0.0-20180502004556-fa1af6a1f4f5 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
@@ -36,6 +41,9 @@ require (
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
@@ -62,6 +70,7 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/net v0.40.0 // indirect
+	golang.org/x/sync v0.14.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect

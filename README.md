@@ -120,17 +120,31 @@ func main() {
 
 ```go
 import (
-    "context"
+    "log"
     "github.com/bignyap/go-utilities/database"
 )
 
 func main() {
-    connStr := database.NewConnectionString("localhost", "5432", "user", "password", "dbname", nil)
-    db := database.NewDatabase(&database.DatabaseConfig{
+    connStr := database.NewConnectionString(
+        "localhost", "5432", "user", "password", "dbname", nil,
+    )
+
+    db, err := database.NewDatabase(&database.DatabaseConfig{
+        Name:             "main-db",            // Optional: useful for logging or multi-DB setups
+        Driver:           "postgres",           // Supports: "postgres", "mysql", "sqlite"
         ConnectionString: connStr,
+        // ConnectionPoolConfig: nil,           // Optional: uses default pool settings
     })
-    db.Connection.Connect()
+    if err != nil {
+        log.Fatalf("failed to create database: %v", err)
+    }
+
+    if err := db.Connection.Connect(); err != nil {
+        log.Fatalf("failed to connect: %v", err)
+    }
     defer db.Connection.Close()
+
+    log.Println("Database connection established")
 }
 ```
 
