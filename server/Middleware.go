@@ -22,7 +22,6 @@ func NewMiddleware(logger api.Logger, config *Config) *Middleware {
 
 func (m *Middleware) Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
-
 		start := time.Now()
 
 		traceID := c.GetHeader("X-Trace-ID")
@@ -30,9 +29,17 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 			traceID = uuid.New().String()
 		}
 
-		reqLogger := m.logger.WithTraceID(traceID).WithComponent("api")
+		reqLogger := m.logger.WithTraceID(traceID).WithComponent("api").
+			AddField("method", c.Request.Method).
+			AddField("path", c.Request.URL.Path).
+			AddField("client_ip", c.ClientIP()).
+			AddField("user_agent", c.Request.UserAgent()).
+			AddField("query", c.Request.URL.RawQuery).
+			AddField("trace_id", traceID)
+
 		c.Set("logger", reqLogger)
 		c.Set("trace_id", traceID)
+
 		c.Writer.Header().Set("X-Trace-ID", traceID)
 		c.Writer.Header().Set("X-Version", m.config.Version)
 
@@ -43,7 +50,8 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		reqLogger = reqLogger.AddField("status", status).
+		reqLogger = reqLogger.
+			AddField("status", status).
 			AddField("latency_ms", float64(latency.Microseconds())/1000.0).
 			AddField("response_size", c.Writer.Size())
 
@@ -68,7 +76,11 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		// Set CORS headers
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		// c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		if origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Trace-ID, X-Version")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")

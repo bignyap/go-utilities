@@ -113,8 +113,8 @@ func NewHTTPServer(cfg *Config, opts ...HTTPServerOption) *HTTPServer {
 		shutdownFn: []func(){},
 	}
 
-	s.router.RedirectTrailingSlash = false
-	s.router.RedirectFixedPath = false
+	// s.router.RedirectTrailingSlash = false
+	// s.router.RedirectFixedPath = false
 
 	for _, opt := range opts {
 		opt(s)
