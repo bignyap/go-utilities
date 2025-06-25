@@ -143,7 +143,7 @@ func FromNullTime(input *MyNullTime) time.Time {
 }
 
 func FromNullInt32ToTime(input *MyNullInt32) time.Time {
-	return misc.FromUnixTime32(input.Int32)
+	return FromUnixTime32(input.Int32)
 }
 
 func NullStrToStr(input *sql.NullString) *string {

@@ -16,11 +16,13 @@ func NewResponseWriter(logger api.Logger) *ResponseWriter {
 }
 
 func (rw *ResponseWriter) Success(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, Response{Data: data})
+	// c.JSON(http.StatusOK, Response{Data: data})
+	c.JSON(http.StatusOK, data)
 }
 
 func (rw *ResponseWriter) Created(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusCreated, Response{Data: data})
+	// c.JSON(http.StatusCreated, Response{Data: data})
+	c.JSON(http.StatusCreated, data)
 }
 
 func (rw *ResponseWriter) NoContent(c *gin.Context) {

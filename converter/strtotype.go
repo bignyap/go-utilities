@@ -72,7 +72,7 @@ func (c UnixTimeConverter) Convert(str string) (int, error) {
 		return -1, fmt.Errorf("not a valid integer: %v", err)
 	}
 
-	return int(misc.ToUnixTime(dateVal)), nil
+	return int(ToUnixTime(dateVal)), nil
 }
 
 type NullInt32Converter struct{}
@@ -159,7 +159,7 @@ func (c NullUnixTime64Converter) Convert(str string) (sql.NullInt64, error) {
 		return sql.NullInt64{Valid: false}, nil
 	}
 
-	return sql.NullInt64{Int64: misc.ToUnixTime(dateVal.Time), Valid: true}, nil
+	return sql.NullInt64{Int64: ToUnixTime(dateVal.Time), Valid: true}, nil
 }
 
 func ConvertString[T any](str string, converter Converter[T]) (T, error) {
