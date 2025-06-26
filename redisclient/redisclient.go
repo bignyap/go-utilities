@@ -10,15 +10,18 @@ import (
 )
 
 type RedisConfig struct {
-	Addr     string `json:"addr" env:"REDIS_ADDR" envDefault:"localhost:6379"`
-	Password string `json:"password" env:"REDIS_PASSWORD"`
-	DB       int    `json:"db" env:"REDIS_DB" envDefault:"0"`
-	PoolSize int    `json:"pool_size" env:"REDIS_POOL_SIZE" envDefault:"10"`
+	UseCluster bool     `json:"use_cluster" env:"REDIS_USE_CLUSTER"`
+	Addrs      []string `json:"addrs" env:"REDIS_ADDRS"` // For cluster
+	Addr       string   `json:"addr" env:"REDIS_ADDR"`   // For single-node
+	Password   string   `json:"password" env:"REDIS_PASSWORD"`
+	DB         int      `json:"db" env:"REDIS_DB"`
+	PoolSize   int      `json:"pool_size" env:"REDIS_POOL_SIZE"`
 }
 
 func DefaultConfig() RedisConfig {
 	return RedisConfig{
 		Addr:     "localhost:6379",
+		Addrs:    []string{"localhost:6379"},
 		Password: "",
 		DB:       0,
 		PoolSize: 10,
@@ -28,35 +31,44 @@ func DefaultConfig() RedisConfig {
 func (c *RedisConfig) applyDefaults() {
 	defaults := DefaultConfig()
 
-	if c.Addr == "" {
+	if c.UseCluster && len(c.Addrs) == 0 {
+		c.Addrs = defaults.Addrs
+	}
+	if !c.UseCluster && c.Addr == "" {
 		c.Addr = defaults.Addr
 	}
 	if c.PoolSize == 0 {
 		c.PoolSize = defaults.PoolSize
 	}
-	// Password and DB can remain zero-value if user intends so
 }
 
 var (
-	client     *redis.Client
+	client     redis.UniversalClient // works for both Client and ClusterClient
 	once       sync.Once
 	clientLock sync.RWMutex
 )
 
-// Init initializes the Redis client using the provided config.
-// It's safe to call multiple times; it will only initialize once.
 func Init(cfg RedisConfig) error {
 	var initErr error
 
 	once.Do(func() {
 		cfg.applyDefaults()
 
-		rdb := redis.NewClient(&redis.Options{
-			Addr:     cfg.Addr,
-			Password: cfg.Password,
-			DB:       cfg.DB,
-			PoolSize: cfg.PoolSize,
-		})
+		var rdb redis.UniversalClient
+		if cfg.UseCluster {
+			rdb = redis.NewClusterClient(&redis.ClusterOptions{
+				Addrs:    cfg.Addrs,
+				Password: cfg.Password,
+				PoolSize: cfg.PoolSize,
+			})
+		} else {
+			rdb = redis.NewClient(&redis.Options{
+				Addr:     cfg.Addr,
+				Password: cfg.Password,
+				DB:       cfg.DB,
+				PoolSize: cfg.PoolSize,
+			})
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -76,7 +88,7 @@ func Init(cfg RedisConfig) error {
 
 var ErrNotInitialized = errors.New("redis client not initialized. call Init() first")
 
-func GetRedisClient() (*redis.Client, error) {
+func GetRedisClient() (redis.UniversalClient, error) {
 	clientLock.RLock()
 	defer clientLock.RUnlock()
 
@@ -86,14 +98,13 @@ func GetRedisClient() (*redis.Client, error) {
 	return client, nil
 }
 
-// Close gracefully closes the Redis client.
 func Close() error {
 	clientLock.Lock()
 	defer clientLock.Unlock()
 
 	if client != nil {
 		err := client.Close()
-		client = nil // allow reinitialization if needed
+		client = nil
 		return err
 	}
 	return nil
