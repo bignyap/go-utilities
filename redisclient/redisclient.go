@@ -2,8 +2,6 @@ package redisclient
 
 import (
 	"context"
-	"errors"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -42,70 +40,32 @@ func (c *RedisConfig) applyDefaults() {
 	}
 }
 
-var (
-	client     redis.UniversalClient // works for both Client and ClusterClient
-	once       sync.Once
-	clientLock sync.RWMutex
-)
+func New(ctx context.Context, cfg RedisConfig) (redis.UniversalClient, error) {
 
-func Init(cfg RedisConfig) error {
-	var initErr error
+	cfg.applyDefaults()
 
-	once.Do(func() {
-		cfg.applyDefaults()
-
-		var rdb redis.UniversalClient
-		if cfg.UseCluster {
-			rdb = redis.NewClusterClient(&redis.ClusterOptions{
-				Addrs:    cfg.Addrs,
-				Password: cfg.Password,
-				PoolSize: cfg.PoolSize,
-			})
-		} else {
-			rdb = redis.NewClient(&redis.Options{
-				Addr:     cfg.Addr,
-				Password: cfg.Password,
-				DB:       cfg.DB,
-				PoolSize: cfg.PoolSize,
-			})
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := rdb.Ping(ctx).Err(); err != nil {
-			initErr = errors.New("failed to connect to Redis: " + err.Error())
-			return
-		}
-
-		clientLock.Lock()
-		defer clientLock.Unlock()
-		client = rdb
-	})
-
-	return initErr
-}
-
-var ErrNotInitialized = errors.New("redis client not initialized. call Init() first")
-
-func GetRedisClient() (redis.UniversalClient, error) {
-	clientLock.RLock()
-	defer clientLock.RUnlock()
-
-	if client == nil {
-		return nil, ErrNotInitialized
+	var client redis.UniversalClient
+	if cfg.UseCluster {
+		client = redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:    cfg.Addrs,
+			Password: cfg.Password,
+			PoolSize: cfg.PoolSize,
+		})
+	} else {
+		client = redis.NewClient(&redis.Options{
+			Addr:     cfg.Addr,
+			Password: cfg.Password,
+			DB:       cfg.DB,
+			PoolSize: cfg.PoolSize,
+		})
 	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctxTimeout).Err(); err != nil {
+		return nil, err
+	}
+
 	return client, nil
-}
-
-func Close() error {
-	clientLock.Lock()
-	defer clientLock.Unlock()
-
-	if client != nil {
-		err := client.Close()
-		client = nil
-		return err
-	}
-	return nil
 }

@@ -6,41 +6,37 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
+type Client struct {
+	c *cache.Cache
+}
+
 type Config struct {
 	DefaultTTL      time.Duration
 	CleanupInterval time.Duration
 }
 
-var (
-	c      *cache.Cache
-	config Config
-)
-
-func Init(cfg Config) {
-	config = cfg
-	c = cache.New(cfg.DefaultTTL, cfg.CleanupInterval)
-}
-
-func Set(key string, val interface{}, ttl ...time.Duration) {
-	expiry := config.DefaultTTL
-	if len(ttl) > 0 {
-		expiry = ttl[0]
+func New(cfg Config) *Client {
+	return &Client{
+		c: cache.New(cfg.DefaultTTL, cfg.CleanupInterval),
 	}
-	c.Set(key, val, expiry)
 }
 
-func Get(key string) (interface{}, bool) {
-	return c.Get(key)
+func (mc *Client) Set(key string, val interface{}, ttl time.Duration) {
+	mc.c.Set(key, val, ttl)
 }
 
-func Invalidate(key string) {
-	c.Delete(key)
+func (mc *Client) Get(key string) (interface{}, bool) {
+	return mc.c.Get(key)
 }
 
-func Flush() {
-	c.Flush()
+func (mc *Client) Delete(key string) {
+	mc.c.Delete(key)
 }
 
-func Stats() int {
-	return c.ItemCount()
+func (mc *Client) Flush() {
+	mc.c.Flush()
+}
+
+func (mc *Client) Stats() int {
+	return mc.c.ItemCount()
 }
