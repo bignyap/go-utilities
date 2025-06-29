@@ -136,6 +136,22 @@ func (m *Middleware) Recovery() gin.HandlerFunc {
 	}
 }
 
+func (m *Middleware) ErrorHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+
+		if len(c.Errors) > 0 {
+			logger := getLoggerFromContext(c)
+			if logger == nil {
+				logger = m.logger
+			}
+			for _, e := range c.Errors {
+				logger.Error("Handler error", e.Err)
+			}
+		}
+	}
+}
+
 func (m *Middleware) Apply(router *gin.Engine) {
 
 	fmt.Println("**************************************")
@@ -156,6 +172,9 @@ func (m *Middleware) Apply(router *gin.Engine) {
 
 	fmt.Println("\tRecovery")
 	router.Use(m.Recovery())
+
+	fmt.Println("\tErrorHandler")
+	router.Use(m.ErrorHandler())
 
 	if m.config.Environment == "dev" || m.config.EnableProfiling {
 		fmt.Println("\tProfiling")
