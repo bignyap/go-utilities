@@ -6,11 +6,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func ToPgInt4Ptr(v *int) pgtype.Int4 {
-	if v == nil {
+func ToPgInt4(ptr *int) pgtype.Int4 {
+	if ptr == nil {
 		return pgtype.Int4{Valid: false}
 	}
-	return pgtype.Int4{Int32: int32(*v), Valid: true}
+	return pgtype.Int4{Int32: int32(*ptr), Valid: true}
 }
 
 func ToPgInt4FromTime(t time.Time) pgtype.Int4 {
@@ -66,13 +66,6 @@ func FromPgBool(v pgtype.Bool) *bool {
 		return nil
 	}
 	return &v.Bool
-}
-
-func ToPgInt4(ptr *int) pgtype.Int4 {
-	if ptr == nil {
-		return pgtype.Int4{Valid: false}
-	}
-	return pgtype.Int4{Int32: int32(*ptr), Valid: true}
 }
 
 func ToPgInt4FromTimeOrDate(t *TimeOrDate) pgtype.Int4 {
