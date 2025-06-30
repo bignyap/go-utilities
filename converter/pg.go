@@ -74,3 +74,20 @@ func ToPgInt4(ptr *int) pgtype.Int4 {
 	}
 	return pgtype.Int4{Int32: int32(*ptr), Valid: true}
 }
+
+func ToPgInt4FromTimeOrDate(t *TimeOrDate) pgtype.Int4 {
+	if t == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{
+		Int32: int32(t.Unix()),
+		Valid: true,
+	}
+}
+
+func ToTimeOrDatePtr(t *time.Time) *TimeOrDate {
+	if t == nil {
+		return nil
+	}
+	return &TimeOrDate{Time: *t}
+}
