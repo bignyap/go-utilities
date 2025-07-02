@@ -10,7 +10,8 @@ type Config struct {
 }
 
 type RedisConfig struct {
-	URL string
+	URL      string
+	Password string
 }
 
 type KafkaConfig struct {

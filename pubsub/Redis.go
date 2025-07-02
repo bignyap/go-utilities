@@ -21,7 +21,8 @@ func NewRedisPubSub(cfg Config) (PubSubClient, error) {
 	}
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr: cfg.Redis.URL,
+		Addr:     cfg.Redis.URL,
+		Password: cfg.Redis.Password,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
