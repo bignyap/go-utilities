@@ -69,6 +69,10 @@ func (cw *CounterWorker) Start(ctx context.Context) {
 	}
 }
 
+func (cw *CounterWorker) GetInterval() time.Duration {
+	return cw.flushEvery
+}
+
 func (cw *CounterWorker) Stop() {
 	close(cw.stopCh)
 }
@@ -83,9 +87,9 @@ func (cw *CounterWorker) Increment(prefix, key string, delta float64) {
 
 func (cw *CounterWorker) flushToRedis(ctx context.Context, prefix string) error {
 	cw.mu.Lock()
+	defer cw.mu.Unlock()
+
 	data := cw.counts[prefix]
-	cw.counts[prefix] = make(map[string]float64)
-	cw.mu.Unlock()
 
 	if len(data) == 0 || cw.redis == nil {
 		return nil
@@ -96,6 +100,11 @@ func (cw *CounterWorker) flushToRedis(ctx context.Context, prefix string) error 
 		pipe.IncrByFloat(ctx, prefix+":"+k, v)
 	}
 	_, err := pipe.Exec(ctx)
+
+	if err == nil {
+		cw.counts[prefix] = make(map[string]float64)
+	}
+
 	return err
 }
 
