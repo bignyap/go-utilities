@@ -55,6 +55,7 @@ func (cw *CounterWorker) Start(ctx context.Context) {
 			}
 
 		case <-ticker.C:
+
 			for prefix := range cw.counts {
 				_ = cw.flushToRedis(ctx, prefix)
 			}
