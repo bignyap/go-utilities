@@ -42,7 +42,7 @@ func (h *SampleHandler) handleError(c *gin.Context) {
 
 func main() {
 
-	config := server.DefaultConfig()
+	config := server.DefaultConfig(server.ServerHTTP)
 	config.Port = "8080"
 	config.Environment = "dev"
 	config.Version = "1.0.0"
