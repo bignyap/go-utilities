@@ -123,7 +123,7 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	if !ok {
 		return jwt.MapClaims{}, fmt.Errorf("issuer (iss) not found in the token")
 	}
-	issuer = strings.Replace(issuer, "localhost", "host.docker.internal", 1)
+	// issuer = strings.Replace(issuer, "localhost", "host.docker.internal", 1)
 
 	parsedUrl, err := url.Parse(issuer)
 	if err != nil {
@@ -146,10 +146,10 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	claims["realm"] = realm
 
 	// Step 3: Extract the issuer and then the realm from it
-	// audience, ok := claims["aud"].(string)
-	// if !ok {
-	// 	return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
-	// }
+	_, ok = claims["aud"].(string)
+	if !ok {
+		return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
+	}
 
 	// Step 4: Get or fetch the JWK set
 	jwks, err := getJWKSet(issuer)
