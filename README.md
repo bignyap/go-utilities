@@ -36,6 +36,13 @@ A modular collection of reusable Go components to simplify backend development. 
 - Built-in middleware for CORS, panic recovery, and request size limits.
 - 📘 [Server Documentation](server/README.md)
 
+### 6. **OpenTelemetry**
+- Distributed tracing and metrics collection.
+- Support for console, OTLP, and Elastic APM exporters.
+- Automatic HTTP instrumentation via Gin middleware.
+- Context propagation for distributed systems.
+- 📘 [OpenTelemetry Documentation](otel/README.md)
+
 ---
 
 ## 📁 Project Structure
@@ -46,6 +53,7 @@ go-utilities/
 ├── httpclient/   # HTTP client with circuit breaker & retries
 ├── kafka/        # Kafka producer and consumer implementations
 ├── logger/       # Structured logging utilities
+├── otel/         # OpenTelemetry tracing and metrics
 ├── server/       # HTTP server setup and middleware
 ├── go.mod        # Module dependencies
 ├── LICENSE       # License information
