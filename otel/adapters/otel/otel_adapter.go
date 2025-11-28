@@ -3,13 +3,17 @@ package otel
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bignyap/go-utilities/otel/api"
 	"github.com/bignyap/go-utilities/otel/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/metric"
@@ -22,6 +26,25 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// parseEndpointURL parses a URL and returns just the host:port portion.
+// If the input is not a URL (no scheme), it returns it as-is.
+// This is needed because OTLP HTTP exporters expect host:port, not full URLs.
+func parseEndpointURL(endpoint string) (hostPort string, isHTTPS bool) {
+	// If it doesn't look like a URL, return as-is
+	if !strings.Contains(endpoint, "://") {
+		return endpoint, false
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint, false
+	}
+
+	isHTTPS = parsed.Scheme == "https"
+	hostPort = parsed.Host
+	return hostPort, isHTTPS
+}
 
 // OtelProvider implements the api.Provider interface using OpenTelemetry SDK
 type OtelProvider struct {
@@ -134,12 +157,36 @@ func (p *OtelProvider) createTraceExporter() (sdktrace.SpanExporter, error) {
 			stdouttrace.WithPrettyPrint(),
 		)
 
-	case config.ExporterTypeOTLP, config.ExporterTypeElasticAPM:
-		// Elastic APM supports OTLP protocol
-		endpoint := p.config.TraceExporter.Endpoint
-		if p.config.TraceExporter.Type == config.ExporterTypeElasticAPM {
-			endpoint = p.config.TraceExporter.ElasticAPM.ServerURL
+	case config.ExporterTypeElasticAPM:
+		// Elastic APM uses HTTP OTLP protocol
+		// Parse URL to extract host:port (OTLP HTTP expects host:port, not full URL)
+		hostPort, isHTTPS := parseEndpointURL(p.config.TraceExporter.ElasticAPM.ServerURL)
+
+		opts := []otlptracehttp.Option{
+			otlptracehttp.WithEndpoint(hostPort),
 		}
+
+		// Add insecure option if specified or if URL uses http://
+		if p.config.TraceExporter.Insecure || !isHTTPS {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+
+		// Add headers for Elastic APM authentication
+		headers := make(map[string]string)
+		if p.config.TraceExporter.ElasticAPM.SecretToken != "" {
+			headers["Authorization"] = "Bearer " + p.config.TraceExporter.ElasticAPM.SecretToken
+		} else if p.config.TraceExporter.ElasticAPM.APIKey != "" {
+			headers["Authorization"] = "ApiKey " + p.config.TraceExporter.ElasticAPM.APIKey
+		}
+		if len(headers) > 0 {
+			opts = append(opts, otlptracehttp.WithHeaders(headers))
+		}
+
+		return otlptracehttp.New(context.Background(), opts...)
+
+	case config.ExporterTypeOTLP:
+		// Standard OTLP uses gRPC
+		endpoint := p.config.TraceExporter.Endpoint
 
 		opts := []otlptracegrpc.Option{
 			otlptracegrpc.WithEndpoint(endpoint),
@@ -148,17 +195,6 @@ func (p *OtelProvider) createTraceExporter() (sdktrace.SpanExporter, error) {
 		// Add insecure option if specified
 		if p.config.TraceExporter.Insecure {
 			opts = append(opts, otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()))
-		}
-
-		// Add headers for Elastic APM authentication
-		if p.config.TraceExporter.Type == config.ExporterTypeElasticAPM {
-			headers := make(map[string]string)
-			if p.config.TraceExporter.ElasticAPM.SecretToken != "" {
-				headers["Authorization"] = "Bearer " + p.config.TraceExporter.ElasticAPM.SecretToken
-			} else if p.config.TraceExporter.ElasticAPM.APIKey != "" {
-				headers["Authorization"] = "ApiKey " + p.config.TraceExporter.ElasticAPM.APIKey
-			}
-			opts = append(opts, otlptracegrpc.WithHeaders(headers))
 		}
 
 		// Add custom headers
@@ -198,12 +234,36 @@ func (p *OtelProvider) createMetricExporter() (sdkmetric.Exporter, error) {
 			stdoutmetric.WithPrettyPrint(),
 		)
 
-	case config.ExporterTypeOTLP, config.ExporterTypeElasticAPM:
-		// Elastic APM supports OTLP protocol
-		endpoint := p.config.MetricExporter.Endpoint
-		if p.config.MetricExporter.Type == config.ExporterTypeElasticAPM {
-			endpoint = p.config.MetricExporter.ElasticAPM.ServerURL
+	case config.ExporterTypeElasticAPM:
+		// Elastic APM uses HTTP OTLP protocol
+		// Parse URL to extract host:port (OTLP HTTP expects host:port, not full URL)
+		hostPort, isHTTPS := parseEndpointURL(p.config.MetricExporter.ElasticAPM.ServerURL)
+
+		opts := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(hostPort),
 		}
+
+		// Add insecure option if specified or if URL uses http://
+		if p.config.MetricExporter.Insecure || !isHTTPS {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
+		}
+
+		// Add headers for Elastic APM authentication
+		headers := make(map[string]string)
+		if p.config.MetricExporter.ElasticAPM.SecretToken != "" {
+			headers["Authorization"] = "Bearer " + p.config.MetricExporter.ElasticAPM.SecretToken
+		} else if p.config.MetricExporter.ElasticAPM.APIKey != "" {
+			headers["Authorization"] = "ApiKey " + p.config.MetricExporter.ElasticAPM.APIKey
+		}
+		if len(headers) > 0 {
+			opts = append(opts, otlpmetrichttp.WithHeaders(headers))
+		}
+
+		return otlpmetrichttp.New(context.Background(), opts...)
+
+	case config.ExporterTypeOTLP:
+		// Standard OTLP uses gRPC
+		endpoint := p.config.MetricExporter.Endpoint
 
 		opts := []otlpmetricgrpc.Option{
 			otlpmetricgrpc.WithEndpoint(endpoint),
@@ -212,17 +272,6 @@ func (p *OtelProvider) createMetricExporter() (sdkmetric.Exporter, error) {
 		// Add insecure option if specified
 		if p.config.MetricExporter.Insecure {
 			opts = append(opts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
-		}
-
-		// Add headers for Elastic APM authentication
-		if p.config.MetricExporter.Type == config.ExporterTypeElasticAPM {
-			headers := make(map[string]string)
-			if p.config.MetricExporter.ElasticAPM.SecretToken != "" {
-				headers["Authorization"] = "Bearer " + p.config.MetricExporter.ElasticAPM.SecretToken
-			} else if p.config.MetricExporter.ElasticAPM.APIKey != "" {
-				headers["Authorization"] = "ApiKey " + p.config.MetricExporter.ElasticAPM.APIKey
-			}
-			opts = append(opts, otlpmetricgrpc.WithHeaders(headers))
 		}
 
 		// Add custom headers

@@ -149,9 +149,7 @@ func (e *ExporterConfig) Validate() error {
 		if e.ElasticAPM.ServerURL == "" {
 			return fmt.Errorf("Elastic APM server URL is required")
 		}
-		if e.ElasticAPM.SecretToken == "" && e.ElasticAPM.APIKey == "" {
-			return fmt.Errorf("Elastic APM requires either secret token or API key")
-		}
+		// SecretToken and APIKey are optional for local development
 		return nil
 	default:
 		return fmt.Errorf("unknown exporter type: %s", e.Type)
