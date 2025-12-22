@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -20,6 +22,55 @@ func NewMiddleware(logger api.Logger, config *Config) *Middleware {
 	return &Middleware{logger: logger, config: config}
 }
 
+// sensitiveQueryParams is a list of query parameter names that should be redacted in logs
+var sensitiveQueryParams = []string{
+	"token",
+	"api_token",
+	"apitoken",
+	"api_key",
+	"apikey",
+	"password",
+	"passwd",
+	"pwd",
+	"secret",
+	"auth",
+	"authorization",
+	"access_token",
+	"refresh_token",
+	"session",
+	"session_id",
+	"sessionid",
+	"api-key",
+	"api-token",
+}
+
+// redactSensitiveQueryParams redacts sensitive query parameters from the query string
+func redactSensitiveQueryParams(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		// If parsing fails, return the original query
+		return rawQuery
+	}
+
+	// Check each query parameter and redact if sensitive
+	for key := range values {
+		keyLower := strings.ToLower(key)
+		for _, sensitive := range sensitiveQueryParams {
+			if keyLower == sensitive || strings.Contains(keyLower, sensitive) {
+				// Redact the value but keep the key
+				values.Set(key, "[REDACTED]")
+				break
+			}
+		}
+	}
+
+	return values.Encode()
+}
+
 func (m *Middleware) Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -29,12 +80,15 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 			traceID = uuid.New().String()
 		}
 
+		// Redact sensitive query parameters
+		redactedQuery := redactSensitiveQueryParams(c.Request.URL.RawQuery)
+
 		reqLogger := m.logger.WithTraceID(traceID).WithComponent("api").
 			AddField("method", c.Request.Method).
 			AddField("path", c.Request.URL.Path).
 			AddField("client_ip", c.ClientIP()).
 			AddField("user_agent", c.Request.UserAgent()).
-			AddField("query", c.Request.URL.RawQuery).
+			AddField("query", redactedQuery).
 			AddField("trace_id", traceID)
 
 		c.Set("logger", reqLogger)
@@ -76,10 +130,12 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		// Set CORS headers
-		// c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		origin := c.Request.Header.Get("Origin")
 		if origin != "" {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			// If no Origin header, allow all origins (for direct browser navigation)
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Trace-ID, X-Version")
