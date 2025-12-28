@@ -1,11 +1,14 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrorType represents categorized error types
@@ -16,7 +19,14 @@ const (
 	ErrorBadRequest   ErrorType = 400
 	ErrorUnauthorized ErrorType = 401
 	ErrorNotFound     ErrorType = 404
+	ErrorConflict     ErrorType = 409
 	ErrorLargePayload ErrorType = 413
+)
+
+// PostgreSQL error codes
+const (
+	PgUniqueViolation     = "23505" // unique_violation
+	PgForeignKeyViolation = "23503" // foreign_key_violation
 )
 
 // InternalError wraps errors with context
@@ -66,6 +76,8 @@ func (e *InternalError) ToHttpStatusCode() int {
 		return http.StatusUnauthorized
 	case ErrorNotFound:
 		return http.StatusNotFound
+	case ErrorConflict:
+		return http.StatusConflict
 	case ErrorLargePayload:
 		return http.StatusRequestEntityTooLarge
 	default:
@@ -81,6 +93,8 @@ func (e *InternalError) ToHttpMessage() string {
 		return "Unauthorized"
 	case ErrorNotFound:
 		return "Not found"
+	case ErrorConflict:
+		return e.Message
 	case ErrorLargePayload:
 		return "Payload too large"
 	default:
@@ -119,4 +133,46 @@ func captureCallerInfo(skip int) string {
 		return "unknown:0"
 	}
 	return fmt.Sprintf("%s:%d", file, line)
+}
+
+// IsUniqueViolation checks if the error is a PostgreSQL unique constraint violation
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == PgUniqueViolation
+	}
+	return false
+}
+
+// IsForeignKeyViolation checks if the error is a PostgreSQL foreign key violation
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == PgForeignKeyViolation
+	}
+	return false
+}
+
+// GetConstraintName extracts the constraint name from a PostgreSQL error
+func GetConstraintName(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
+// ParseUniqueViolationField extracts a user-friendly field name from the constraint name
+func ParseUniqueViolationField(constraintName string) string {
+	// Common patterns: "tablename_fieldname_key" or "tablename_fieldname_idx"
+	parts := strings.Split(constraintName, "_")
+	if len(parts) >= 2 {
+		// Return the field name (usually the second-to-last part before _key or _idx)
+		for i := len(parts) - 1; i >= 0; i-- {
+			if parts[i] != "key" && parts[i] != "idx" && parts[i] != "unique" {
+				return parts[i]
+			}
+		}
+	}
+	return constraintName
 }
