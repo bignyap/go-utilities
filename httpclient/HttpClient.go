@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bignyap/go-utilities/logger/api"
 	"github.com/gojek/heimdall"
 	"github.com/gojek/heimdall/v7/httpclient"
 	"github.com/gojek/heimdall/v7/hystrix"
@@ -183,7 +184,51 @@ func NewHTTPClient(baseURL string, config ClientConfig, fallbackFn func(error) e
 type hystrixRoundTripper struct{ client *hystrix.Client }
 
 func (rt *hystrixRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Propagate trace_id from context to request header for distributed tracing
+	propagateTraceID(req)
 	return rt.client.Do(req)
+}
+
+// ============================================================================
+// Tracing HTTP Client
+// ============================================================================
+
+// TracingRoundTripper wraps an http.RoundTripper and propagates trace_id from context
+type TracingRoundTripper struct {
+	Base http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper and adds trace_id header propagation
+func (t *TracingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	propagateTraceID(req)
+
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
+// NewTracingHTTPClient creates a simple *http.Client that automatically propagates trace_id
+// from request context to X-Trace-ID header. Use this for simple HTTP clients without
+// circuit breaker or retry logic.
+func NewTracingHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &TracingRoundTripper{
+			Base: http.DefaultTransport,
+		},
+	}
+}
+
+// propagateTraceID extracts trace_id from request context and sets it as X-Trace-ID header
+func propagateTraceID(req *http.Request) {
+	if req == nil || req.Context() == nil {
+		return
+	}
+	if traceID := api.GetTraceIDFromContext(req.Context()); traceID != "" {
+		req.Header.Set("X-Trace-ID", traceID)
+	}
 }
 
 // ============================================================================

@@ -47,16 +47,17 @@ func NewGRPCServer(cfg *Config, opts ...HTTPServerOption) *GRPCServer {
 }
 
 func (s *GRPCServer) Start() error {
+	ctx := context.Background()
 	for _, h := range s.handlers {
 		if err := h.Setup(nil); err != nil {
-			s.logger.Error("gRPC handler setup failed", err)
+			s.logger.Error(ctx, "gRPC handler setup failed", err)
 			return err
 		}
 	}
 
 	lis, err := net.Listen("tcp", ":"+s.config.Port)
 	if err != nil {
-		s.logger.Error("Failed to listen", err)
+		s.logger.Error(ctx, "Failed to listen", err)
 		return err
 	}
 
@@ -64,11 +65,11 @@ func (s *GRPCServer) Start() error {
 		api.String("port", s.config.Port),
 		api.String("env", s.config.Environment),
 		api.String("version", s.config.Version),
-	).Info("Starting gRPC server")
+	).Info(ctx, "Starting gRPC server")
 
 	go func() {
 		if err := s.grpcServer.Serve(lis); err != nil {
-			s.logger.Error("gRPC server failed", err)
+			s.logger.Error(ctx, "gRPC server failed", err)
 		}
 	}()
 
@@ -80,11 +81,12 @@ func (s *GRPCServer) waitForShutdown() error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	s.logger.Info("Shutdown signal received for gRPC")
+	ctx := context.Background()
+	s.logger.Info(ctx, "Shutdown signal received for gRPC")
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(ctx, s.config.ShutdownTimeout)
 	defer cancel()
-	return s.Shutdown(ctx)
+	return s.Shutdown(shutdownCtx)
 }
 
 func (s *GRPCServer) Shutdown(ctx context.Context) error {
@@ -93,11 +95,11 @@ func (s *GRPCServer) Shutdown(ctx context.Context) error {
 	}
 	for _, h := range s.handlers {
 		if err := h.Shutdown(); err != nil {
-			s.logger.Error("Handler shutdown error", err)
+			s.logger.Error(ctx, "Handler shutdown error", err)
 		}
 	}
 	s.grpcServer.GracefulStop()
-	s.logger.Info("gRPC server shut down cleanly")
+	s.logger.Info(ctx, "gRPC server shut down cleanly")
 	return nil
 }
 

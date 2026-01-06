@@ -53,26 +53,30 @@ func NewZerologger(cfg config.LogConfig) (*Logger, error) {
 	return &Logger{log: logger}, nil
 }
 
-func (l *Logger) Debug(msg string, fields ...api.Field) {
+func (l *Logger) Debug(ctx context.Context, msg string, fields ...api.Field) {
 	event := l.log.Debug()
+	l.addContextFields(ctx, event)
 	l.addFields(event, fields)
 	event.Msg(msg)
 }
 
-func (l *Logger) Info(msg string, fields ...api.Field) {
+func (l *Logger) Info(ctx context.Context, msg string, fields ...api.Field) {
 	event := l.log.Info()
+	l.addContextFields(ctx, event)
 	l.addFields(event, fields)
 	event.Msg(msg)
 }
 
-func (l *Logger) Warn(msg string, fields ...api.Field) {
+func (l *Logger) Warn(ctx context.Context, msg string, fields ...api.Field) {
 	event := l.log.Warn()
+	l.addContextFields(ctx, event)
 	l.addFields(event, fields)
 	event.Msg(msg)
 }
 
-func (l *Logger) Error(msg string, err error, fields ...api.Field) {
+func (l *Logger) Error(ctx context.Context, msg string, err error, fields ...api.Field) {
 	event := l.log.Error()
+	l.addContextFields(ctx, event)
 	if err != nil {
 		event = event.Err(err)
 	}
@@ -80,8 +84,9 @@ func (l *Logger) Error(msg string, err error, fields ...api.Field) {
 	event.Msg(msg)
 }
 
-func (l *Logger) Fatal(msg string, err error, fields ...api.Field) {
+func (l *Logger) Fatal(ctx context.Context, msg string, err error, fields ...api.Field) {
 	event := l.log.Fatal()
+	l.addContextFields(ctx, event)
 	if err != nil {
 		event = event.Err(err)
 	}
@@ -118,20 +123,6 @@ func (l *Logger) WithComponent(component string) api.Logger {
 	return &Logger{log: newLog, component: component, fields: l.fields}
 }
 
-func (l *Logger) FromContext(ctx context.Context) api.Logger {
-	if ctx == nil {
-		return l
-	}
-	logger := l
-	if traceID := api.GetTraceIDFromContext(ctx); traceID != "" {
-		logger = logger.WithTraceID(traceID).(*Logger)
-	}
-	if component, ok := ctx.Value(api.ComponentKey).(string); ok && component != "" {
-		logger = logger.WithComponent(component).(*Logger)
-	}
-	return logger
-}
-
 func (l *Logger) ToContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -147,6 +138,17 @@ func (l *Logger) AddField(key string, value interface{}) api.Logger {
 	newLog := l.log.With().Interface(key, value).Logger()
 	newFields := append(l.fields, api.Field{Key: key, Value: value})
 	return &Logger{log: newLog, component: l.component, fields: newFields}
+}
+
+// addContextFields extracts trace_id and other metadata from context and adds to the log event
+func (l *Logger) addContextFields(ctx context.Context, event *zerolog.Event) {
+	if ctx == nil {
+		return
+	}
+	// Extract trace_id from context
+	if traceID := api.GetTraceIDFromContext(ctx); traceID != "" {
+		event.Str("trace_id", traceID)
+	}
 }
 
 func (l *Logger) addFields(event *zerolog.Event, fields []api.Field) {

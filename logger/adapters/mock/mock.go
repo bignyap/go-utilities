@@ -41,7 +41,7 @@ func NewMockLogger() *Mock {
 }
 
 // Debug logs a debug message
-func (m *Mock) Debug(msg string, fields ...api.Field) {
+func (m *Mock) Debug(ctx context.Context, msg string, fields ...api.Field) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.debugMessages = append(m.debugMessages, LogEntry{
@@ -51,7 +51,7 @@ func (m *Mock) Debug(msg string, fields ...api.Field) {
 }
 
 // Info logs an info message
-func (m *Mock) Info(msg string, fields ...api.Field) {
+func (m *Mock) Info(ctx context.Context, msg string, fields ...api.Field) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.infoMessages = append(m.infoMessages, LogEntry{
@@ -61,7 +61,7 @@ func (m *Mock) Info(msg string, fields ...api.Field) {
 }
 
 // Warn logs a warning message
-func (m *Mock) Warn(msg string, fields ...api.Field) {
+func (m *Mock) Warn(ctx context.Context, msg string, fields ...api.Field) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.warnMessages = append(m.warnMessages, LogEntry{
@@ -71,7 +71,7 @@ func (m *Mock) Warn(msg string, fields ...api.Field) {
 }
 
 // Error logs an error message
-func (m *Mock) Error(msg string, err error, fields ...api.Field) {
+func (m *Mock) Error(ctx context.Context, msg string, err error, fields ...api.Field) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.errorMessages = append(m.errorMessages, LogEntry{
@@ -82,7 +82,7 @@ func (m *Mock) Error(msg string, err error, fields ...api.Field) {
 }
 
 // Fatal logs a fatal message
-func (m *Mock) Fatal(msg string, err error, fields ...api.Field) {
+func (m *Mock) Fatal(ctx context.Context, msg string, err error, fields ...api.Field) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lastFatalError = err
@@ -138,25 +138,6 @@ func (m *Mock) WithComponent(component string) api.Logger {
 		traceID:       m.traceID,
 	}
 	return newLogger
-}
-
-// FromContext extracts logging information from context
-func (m *Mock) FromContext(ctx context.Context) api.Logger {
-	if ctx == nil {
-		return m
-	}
-
-	logger := m
-
-	if traceID := api.GetTraceIDFromContext(ctx); traceID != "" {
-		logger = logger.WithTraceID(traceID).(*Mock)
-	}
-
-	if component, ok := ctx.Value(api.ComponentKey).(string); ok && component != "" {
-		logger = logger.WithComponent(component).(*Mock)
-	}
-
-	return logger
 }
 
 // ToContext adds this logger to the context

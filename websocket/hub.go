@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"sync"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -69,12 +70,13 @@ func (h *Hub) registerClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	ctx := context.Background()
 	if _, ok := h.clients[client.UserID]; !ok {
 		h.clients[client.UserID] = make(map[string]*Client)
 	}
 	h.clients[client.UserID][client.ID] = client
 
-	h.logger.Info("Client registered",
+	h.logger.Info(ctx, "Client registered",
 		api.String("client_id", client.ID),
 		api.String("user_id", client.UserID),
 		api.String("tenant_id", client.TenantID),
@@ -85,6 +87,7 @@ func (h *Hub) unregisterClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	ctx := context.Background()
 	// Remove from user clients
 	if userClients, ok := h.clients[client.UserID]; ok {
 		if _, exists := userClients[client.ID]; exists {
@@ -109,7 +112,7 @@ func (h *Hub) unregisterClient(client *Client) {
 		}
 	}
 
-	h.logger.Info("Client unregistered",
+	h.logger.Info(ctx, "Client unregistered",
 		api.String("client_id", client.ID),
 		api.String("user_id", client.UserID),
 	)
@@ -120,6 +123,7 @@ func (h *Hub) JoinGroup(groupID string, client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	ctx := context.Background()
 	if _, ok := h.groups[groupID]; !ok {
 		h.groups[groupID] = make(map[string]map[string]*Client)
 	}
@@ -128,7 +132,7 @@ func (h *Hub) JoinGroup(groupID string, client *Client) {
 	}
 	h.groups[groupID][client.UserID][client.ID] = client
 
-	h.logger.Debug("Client joined group",
+	h.logger.Debug(ctx, "Client joined group",
 		api.String("client_id", client.ID),
 		api.String("user_id", client.UserID),
 		api.String("group_id", groupID),
@@ -140,6 +144,7 @@ func (h *Hub) LeaveGroup(groupID string, client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	ctx := context.Background()
 	if groupUsers, ok := h.groups[groupID]; ok {
 		if userClients, ok := groupUsers[client.UserID]; ok {
 			delete(userClients, client.ID)
@@ -152,7 +157,7 @@ func (h *Hub) LeaveGroup(groupID string, client *Client) {
 		}
 	}
 
-	h.logger.Debug("Client left group",
+	h.logger.Debug(ctx, "Client left group",
 		api.String("client_id", client.ID),
 		api.String("user_id", client.UserID),
 		api.String("group_id", groupID),

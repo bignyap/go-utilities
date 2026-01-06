@@ -41,7 +41,7 @@ func (rw *ResponseWriter) Error(c *gin.Context, err error) {
 		api.Int("code", apiErr.Code),
 		api.String("message", apiErr.Message),
 		api.String("trace_id", apiErr.TraceID),
-	).Error("API error response", err)
+	).Error(c.Request.Context(), "API error response", err)
 
 	c.JSON(apiErr.Code, ErrorResponse{Error: apiErr.Message})
 }

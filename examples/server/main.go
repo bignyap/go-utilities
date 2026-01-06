@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -27,7 +28,7 @@ func (h *SampleHandler) Setup(s server.Server) error {
 }
 
 func (h *SampleHandler) Shutdown() error {
-	h.log.Info("Shutting down SampleHandler")
+	h.log.Info(context.Background(), "Shutting down SampleHandler")
 	return nil
 }
 
@@ -41,6 +42,7 @@ func (h *SampleHandler) handleError(c *gin.Context) {
 }
 
 func main() {
+	ctx := context.Background()
 
 	config := server.DefaultConfig(server.ServerHTTP)
 	config.Port = "8080"
@@ -58,6 +60,6 @@ func main() {
 	)
 
 	if err := s.Start(); err != nil {
-		logger.Error("Server failed", err)
+		logger.Error(ctx, "Server failed", err)
 	}
 }

@@ -114,9 +114,10 @@ func (s *HTTPServer) Router() *gin.Engine {
 }
 
 func (s *HTTPServer) Start() error {
+	ctx := context.Background()
 	for _, h := range s.handlers {
 		if err := h.Setup(s); err != nil {
-			s.logger.Error("Handler setup failed", err)
+			s.logger.Error(ctx, "Handler setup failed", err)
 			return err
 		}
 	}
@@ -125,11 +126,11 @@ func (s *HTTPServer) Start() error {
 		api.String("port", s.config.Port),
 		api.String("env", s.config.Environment),
 		api.String("version", s.config.Version),
-	).Info("Starting server")
+	).Info(ctx, "Starting server")
 
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("HTTP server failed", err)
+			s.logger.Error(ctx, "HTTP server failed", err)
 		}
 	}()
 
@@ -141,11 +142,12 @@ func (s *HTTPServer) waitForShutdown() error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	s.logger.Info("Shutdown signal received")
+	ctx := context.Background()
+	s.logger.Info(ctx, "Shutdown signal received")
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(ctx, s.config.ShutdownTimeout)
 	defer cancel()
-	return s.Shutdown(ctx)
+	return s.Shutdown(shutdownCtx)
 }
 
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
@@ -155,16 +157,16 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 
 	for _, h := range s.handlers {
 		if err := h.Shutdown(); err != nil {
-			s.logger.Error("Handler shutdown error", err)
+			s.logger.Error(ctx, "Handler shutdown error", err)
 		}
 	}
 
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		s.logger.Error("Server shutdown error", err)
+		s.logger.Error(ctx, "Server shutdown error", err)
 		return err
 	}
 
-	s.logger.Info("Server shut down cleanly")
+	s.logger.Info(ctx, "Server shut down cleanly")
 	return nil
 }
 

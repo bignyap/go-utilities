@@ -6,22 +6,25 @@ import (
 	"time"
 )
 
-// Logger defines the core logging interface
-// Implementations can wrap different logging libraries
-// like zerolog, zap, logrus, etc.
+// Logger defines the core logging interface with context-first design.
+// All logging methods take context.Context as the first parameter to
+// automatically extract trace_id and other request-scoped metadata.
+// Implementations can wrap different logging libraries like zerolog, zap, logrus, etc.
 type Logger interface {
-	Debug(msg string, fields ...Field)
-	Info(msg string, fields ...Field)
-	Warn(msg string, fields ...Field)
-	Error(msg string, err error, fields ...Field)
-	Fatal(msg string, err error, fields ...Field)
+	// Context-first logging methods - automatically extract trace_id from context
+	Debug(ctx context.Context, msg string, fields ...Field)
+	Info(ctx context.Context, msg string, fields ...Field)
+	Warn(ctx context.Context, msg string, fields ...Field)
+	Error(ctx context.Context, msg string, err error, fields ...Field)
+	Fatal(ctx context.Context, msg string, err error, fields ...Field)
 
+	// Builder methods for adding metadata
 	WithTraceID(traceID string) Logger
 	WithFields(fields ...Field) Logger
 	WithComponent(component string) Logger
 	AddField(key string, value interface{}) Logger
 
-	FromContext(ctx context.Context) Logger
+	// Context integration
 	ToContext(ctx context.Context) context.Context
 }
 
@@ -100,14 +103,15 @@ func GetTraceIDFromContext(ctx context.Context) string {
 // DefaultLogger is a no-op logger that satisfies the api.Logger interface
 type DefaultLogger struct{}
 
-func (d *DefaultLogger) Info(msg string, args ...Field)                {}
-func (d *DefaultLogger) Warn(msg string, args ...Field)                {}
-func (d *DefaultLogger) Error(msg string, err error, args ...Field)    {}
-func (d *DefaultLogger) Fatal(msg string, err error, args ...Field)    {}
-func (d *DefaultLogger) Debug(msg string, args ...Field)               {}
+func (d *DefaultLogger) Debug(ctx context.Context, msg string, args ...Field) {}
+func (d *DefaultLogger) Info(ctx context.Context, msg string, args ...Field)  {}
+func (d *DefaultLogger) Warn(ctx context.Context, msg string, args ...Field)  {}
+func (d *DefaultLogger) Error(ctx context.Context, msg string, err error, args ...Field) {
+}
+func (d *DefaultLogger) Fatal(ctx context.Context, msg string, err error, args ...Field) {
+}
 func (d *DefaultLogger) WithFields(fields ...Field) Logger             { return d }
 func (d *DefaultLogger) WithTraceID(traceID string) Logger             { return d }
 func (d *DefaultLogger) WithComponent(component string) Logger         { return d }
 func (d *DefaultLogger) AddField(key string, value interface{}) Logger { return d }
-func (d *DefaultLogger) FromContext(ctx context.Context) Logger        { return d }
 func (d *DefaultLogger) ToContext(ctx context.Context) context.Context { return ctx }

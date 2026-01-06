@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -117,7 +118,7 @@ func (c *Client) Send(message []byte) bool {
 	case c.send <- message:
 		return true
 	default:
-		c.logger.Warn("Client send buffer full",
+		c.logger.Warn(context.Background(), "Client send buffer full",
 			api.String("client_id", c.ID),
 			api.String("user_id", c.UserID),
 		)

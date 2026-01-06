@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -80,6 +81,10 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 			traceID = uuid.New().String()
 		}
 
+		// Store trace_id in Go's context.Context for logger to extract
+		ctx := context.WithValue(c.Request.Context(), api.TraceIDKey, traceID)
+		c.Request = c.Request.WithContext(ctx)
+
 		// Redact sensitive query parameters
 		redactedQuery := redactSensitiveQueryParams(c.Request.URL.RawQuery)
 
@@ -97,7 +102,7 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 		c.Writer.Header().Set("X-Trace-ID", traceID)
 		c.Writer.Header().Set("X-Version", m.config.Version)
 
-		reqLogger.Info("Incoming request")
+		reqLogger.Info(ctx, "Incoming request")
 
 		c.Next()
 
@@ -111,17 +116,17 @@ func (m *Middleware) Logger() gin.HandlerFunc {
 
 		if len(c.Errors) > 0 {
 			for _, e := range c.Errors {
-				reqLogger.Error("Handler error", e.Err)
+				reqLogger.Error(ctx, "Handler error", e.Err)
 			}
 		}
 
 		switch {
 		case status >= 500:
-			reqLogger.Error("Request failed", nil)
+			reqLogger.Error(ctx, "Request failed", nil)
 		case status >= 400:
-			reqLogger.Warn("Client error")
+			reqLogger.Warn(ctx, "Client error")
 		default:
-			reqLogger.Info("Request completed")
+			reqLogger.Info(ctx, "Request completed")
 		}
 	}
 }
@@ -184,7 +189,7 @@ func (m *Middleware) Recovery() gin.HandlerFunc {
 				if logger == nil {
 					logger = m.logger
 				}
-				logger.Error("Recovered panic", fmt.Errorf("%v", err))
+				logger.Error(c.Request.Context(), "Recovered panic", fmt.Errorf("%v", err))
 				c.AbortWithStatus(http.StatusInternalServerError)
 			}
 		}()
@@ -202,7 +207,7 @@ func (m *Middleware) ErrorHandler() gin.HandlerFunc {
 				logger = m.logger
 			}
 			for _, e := range c.Errors {
-				logger.Error("Handler error", e.Err)
+				logger.Error(c.Request.Context(), "Handler error", e.Err)
 			}
 		}
 	}

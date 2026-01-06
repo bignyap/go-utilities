@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"time"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -27,11 +28,12 @@ func (c *Client) ReadPump() {
 		return nil
 	})
 
+	ctx := context.Background()
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				c.logger.Error("WebSocket read error", err,
+				c.logger.Error(ctx, "WebSocket read error", err,
 					api.String("client_id", c.ID),
 					api.String("user_id", c.UserID),
 				)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -13,7 +14,7 @@ func main() {
 
 	logger := factory.GetGlobalLogger()
 
-	logger.Info("Calling some function",
+	logger.Info(context.Background(), "Calling some function",
 		api.Field{
 			Key:   "function",
 			Value: "SomeFunction",

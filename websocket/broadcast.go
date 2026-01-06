@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -11,6 +12,7 @@ func (h *Hub) SendToUser(userID string, message []byte) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
+	ctx := context.Background()
 	count := 0
 	if userClients, ok := h.clients[userID]; ok {
 		for _, client := range userClients {
@@ -18,12 +20,12 @@ func (h *Hub) SendToUser(userID string, message []byte) int {
 				count++
 			}
 		}
-		h.logger.Debug("Message sent to user",
+		h.logger.Debug(ctx, "Message sent to user",
 			api.String("user_id", userID),
 			api.Int("client_count", count),
 		)
 	} else {
-		h.logger.Debug("No clients found for user",
+		h.logger.Debug(ctx, "No clients found for user",
 			api.String("user_id", userID),
 		)
 	}
@@ -252,7 +254,7 @@ func (h *Hub) DisconnectUser(userID string) {
 		}
 	}
 
-	h.logger.Info("Disconnected all clients for user",
+	h.logger.Info(context.Background(), "Disconnected all clients for user",
 		api.String("user_id", userID),
 	)
 }
