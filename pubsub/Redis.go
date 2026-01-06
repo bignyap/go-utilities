@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -29,6 +30,16 @@ func NewRedisPubSub(cfg Config) (PubSubClient, error) {
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis ping failed: %w", err)
+	}
+
+	// Add OpenTelemetry instrumentation if enabled
+	if cfg.EnableTelemetry {
+		if err := redisotel.InstrumentTracing(rdb); err != nil {
+			return nil, fmt.Errorf("failed to instrument redis tracing: %w", err)
+		}
+		if err := redisotel.InstrumentMetrics(rdb); err != nil {
+			return nil, fmt.Errorf("failed to instrument redis metrics: %w", err)
+		}
 	}
 
 	return &RedisPubSub{

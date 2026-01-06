@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq"
@@ -50,6 +51,7 @@ type ConnectionPoolConfig struct {
 	MaxIdleConns    int
 	ConnMaxIdleTime time.Duration
 	ConnMaxLifetime time.Duration
+	EnableTelemetry bool // Enable OpenTelemetry tracing for database operations
 }
 
 func DefaultPoolConfig() *ConnectionPoolConfig {
@@ -152,6 +154,11 @@ func (c *Connection) Connect() error {
 		}
 
 		cfg.MaxConns = int32(c.PoolConfig.MaxOpenConns)
+
+		// Add OpenTelemetry tracing if enabled
+		if c.PoolConfig.EnableTelemetry {
+			cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+		}
 
 		ctx := context.Background()
 		pool, err := pgxpool.NewWithConfig(ctx, cfg)
