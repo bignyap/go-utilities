@@ -146,6 +146,12 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Trace-ID, X-Version")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 
+		// NOTE: X-Tenant-ID and X-User-ID are NOT in the CORS allowed headers list.
+		// This is intentional - the frontend should NOT send these headers.
+		// The backend extracts tenant_id and user_id from the JWT token in the Authorization header.
+		// If services need to communicate with each other and pass these headers, they should
+		// use server-to-server authentication, not browser CORS requests.
+
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
