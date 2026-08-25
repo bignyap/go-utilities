@@ -22,11 +22,19 @@ func NewStorageServiceWithType(storageType api.StorageType) (api.StorageService,
 	switch storageType {
 	case api.StorageTypeMinio:
 		cfg := config.LoadMinIOConfig()
-		return minioadapter.NewMinIOStorageService(cfg)
+		svc, err := minioadapter.NewMinIOStorageService(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return svc, nil
 
 	case api.StorageTypeS3:
 		cfg := config.LoadS3Config()
-		return s3adapter.NewS3StorageService(cfg)
+		svc, err := s3adapter.NewS3StorageService(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return svc, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported storage type: %s (supported: minio, s3)", storageType)
