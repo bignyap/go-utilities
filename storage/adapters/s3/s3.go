@@ -137,6 +137,23 @@ func (s *S3StorageService) GetPresignedURL(ctx context.Context, storagePath stri
 	return result.URL, nil
 }
 
+// GetPresignedUploadURL generates a presigned URL for direct uploading (PUT)
+func (s *S3StorageService) GetPresignedUploadURL(ctx context.Context, storagePath string, contentType string, expirySeconds int) (string, error) {
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(storagePath),
+	}
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+
+	result, err := s.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(time.Duration(expirySeconds)*time.Second))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned upload URL: %w", err)
+	}
+	return result.URL, nil
+}
+
 // Delete deletes a file from S3
 func (s *S3StorageService) Delete(ctx context.Context, storagePath string) error {
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -149,3 +166,39 @@ func (s *S3StorageService) Delete(ctx context.Context, storagePath string) error
 	return nil
 }
 
+// DownloadRange downloads a byte range [start, start+length-1] from S3
+func (s *S3StorageService) DownloadRange(ctx context.Context, storagePath string, start, length int64) ([]byte, error) {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(storagePath),
+	}
+	if length > 0 {
+		rangeHeader := fmt.Sprintf("bytes=%d-%d", start, start+length-1)
+		input.Range = aws.String(rangeHeader)
+	}
+	result, err := s.client.GetObject(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object range: %w", err)
+	}
+	defer result.Body.Close()
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read object range: %w", err)
+	}
+	return data, nil
+}
+
+// Copy copies an object from srcPath to dstPath within the bucket
+func (s *S3StorageService) Copy(ctx context.Context, srcPath, dstPath string) error {
+	copySource := fmt.Sprintf("%s/%s", s.bucketName, srcPath)
+	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.bucketName),
+		CopySource: aws.String(copySource),
+		Key:        aws.String(dstPath),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to copy object: %w", err)
+	}
+	return nil
+}

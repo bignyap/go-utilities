@@ -20,6 +20,16 @@ type StorageService interface {
 	// The URL expires after expirySeconds
 	GetPresignedURL(ctx context.Context, storagePath string, expirySeconds int) (url string, err error)
 
+	// GetPresignedUploadURL generates a presigned URL for direct uploading (PUT)
+	// The URL expires after expirySeconds
+	GetPresignedUploadURL(ctx context.Context, storagePath string, contentType string, expirySeconds int) (url string, err error)
+
+	// DownloadRange downloads a byte range [start, start+length-1] from storage
+	DownloadRange(ctx context.Context, storagePath string, start, length int64) (data []byte, err error)
+
+	// Copy copies an object from srcPath to dstPath within storage
+	Copy(ctx context.Context, srcPath, dstPath string) error
+
 	// Delete deletes a file from storage
 	Delete(ctx context.Context, storagePath string) error
 }
@@ -31,4 +41,3 @@ const (
 	StorageTypeMinio StorageType = "minio"
 	StorageTypeS3    StorageType = "s3"
 )
-

@@ -97,6 +97,16 @@ func (s *MinIOStorageService) GetPresignedURL(ctx context.Context, storagePath s
 	return url.String(), nil
 }
 
+// GetPresignedUploadURL generates a presigned URL for direct uploading (PUT)
+func (s *MinIOStorageService) GetPresignedUploadURL(ctx context.Context, storagePath string, contentType string, expirySeconds int) (string, error) {
+	expiry := time.Duration(expirySeconds) * time.Second
+	url, err := s.client.PresignedPutObject(ctx, s.bucketName, storagePath, expiry)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned upload URL: %w", err)
+	}
+	return url.String(), nil
+}
+
 // Delete deletes a file from MinIO
 func (s *MinIOStorageService) Delete(ctx context.Context, storagePath string) error {
 	err := s.client.RemoveObject(ctx, s.bucketName, storagePath, minio.RemoveObjectOptions{})
@@ -106,3 +116,40 @@ func (s *MinIOStorageService) Delete(ctx context.Context, storagePath string) er
 	return nil
 }
 
+// DownloadRange downloads a byte range [start, start+length-1] from MinIO
+func (s *MinIOStorageService) DownloadRange(ctx context.Context, storagePath string, start, length int64) ([]byte, error) {
+	opts := minio.GetObjectOptions{}
+	if length > 0 {
+		if err := opts.SetRange(start, start+length-1); err != nil {
+			return nil, fmt.Errorf("failed to set range: %w", err)
+		}
+	}
+	obj, err := s.client.GetObject(ctx, s.bucketName, storagePath, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object range: %w", err)
+	}
+	defer obj.Close()
+
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read object range: %w", err)
+	}
+	return data, nil
+}
+
+// Copy copies an object from srcPath to dstPath within the bucket
+func (s *MinIOStorageService) Copy(ctx context.Context, srcPath, dstPath string) error {
+	src := minio.CopySrcOptions{
+		Bucket: s.bucketName,
+		Object: srcPath,
+	}
+	dst := minio.CopyDestOptions{
+		Bucket: s.bucketName,
+		Object: dstPath,
+	}
+	_, err := s.client.CopyObject(ctx, dst, src)
+	if err != nil {
+		return fmt.Errorf("failed to copy object: %w", err)
+	}
+	return nil
+}
