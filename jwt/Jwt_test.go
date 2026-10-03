@@ -310,3 +310,136 @@ func TestParseAndVerifyJWT_AudienceMismatch(t *testing.T) {
 		t.Fatalf("expected audience validation error, got none")
 	}
 }
+
+func TestIsIssuerAllowed(t *testing.T) {
+	tests := []struct {
+		name         string
+		issuer       string
+		authURL      string
+		allowedHosts string
+		want         bool
+	}{
+		{
+			name:    "Exact match single URL",
+			issuer:  "http://localhost:8180/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb",
+			want:    true,
+		},
+		{
+			name:    "Comma-separated AUTH_URL matching second entry",
+			issuer:  "http://192.168.1.4:8180/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb, http://192.168.1.4:8180/auth/realms/kgb",
+			want:    true,
+		},
+		{
+			name:         "Matched via AUTH_ALLOWED_HOSTS",
+			issuer:       "http://192.168.1.4:8180/auth/realms/kgb",
+			authURL:      "http://localhost:8180/auth/realms/kgb",
+			allowedHosts: "192.168.1.4:8180, keycloak:8080",
+			want:         true,
+		},
+		{
+			name:         "Hostname match without port in ALLOWED_HOSTS",
+			issuer:       "http://192.168.1.4:8180/auth/realms/kgb",
+			authURL:      "http://localhost:8180/auth/realms/kgb",
+			allowedHosts: "192.168.1.4",
+			want:         true,
+		},
+		{
+			name:    "Hostname match without port in AUTH_URL",
+			issuer:  "http://192.168.1.4:8180/auth/realms/kgb",
+			authURL: "http://192.168.1.4/auth/realms/kgb",
+			want:    true,
+		},
+		{
+			name:    "Loopback equivalence localhost vs 127.0.0.1",
+			issuer:  "http://127.0.0.1:8180/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb",
+			want:    true,
+		},
+		{
+			name:    "Loopback equivalence host.docker.internal vs localhost",
+			issuer:  "http://host.docker.internal:8180/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb",
+			want:    true,
+		},
+		{
+			name:    "Disallowed external host",
+			issuer:  "http://malicious-site.com/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb, http://192.168.1.4:8180/auth/realms/kgb",
+			want:    false,
+		},
+		{
+			name:    "Empty config",
+			issuer:  "http://localhost:8180/auth/realms/kgb",
+			authURL: "",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AUTH_URL", tt.authURL)
+			t.Setenv("AUTH_ALLOWED_HOSTS", tt.allowedHosts)
+
+			got := isIssuerAllowed(tt.issuer)
+			if got != tt.want {
+				t.Errorf("isIssuerAllowed(%q) = %v, want %v (AUTH_URL=%q, AUTH_ALLOWED_HOSTS=%q)",
+					tt.issuer, got, tt.want, tt.authURL, tt.allowedHosts)
+			}
+		})
+	}
+}
+
+func TestParseAndVerifyJWT_ArrayAudience(t *testing.T) {
+	if certCache != nil {
+		certCache.Flush()
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	pubJWK, err := jwk.New(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to build JWK: %v", err)
+	}
+	_ = pubJWK.Set(jwk.KeyIDKey, "kid1")
+	set := jwk.NewSet()
+	set.Add(pubJWK)
+	jwksJSON, _ := json.Marshal(set)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/realms/dev/protocol/openid-connect/certs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksJSON)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	issuer := srv.URL + "/realms/dev"
+	t.Setenv("AUTH_URL", srv.URL)
+	t.Setenv("AUTH_AUDIENCE", "kgb-admin")
+
+	// Keycloak frequently sets aud as an array
+	claims := jwtlib.MapClaims{
+		"iss": issuer,
+		"aud": []interface{}{"account", "kgb-admin"},
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodRS256, claims)
+	tok.Header["kid"] = "kid1"
+	signed, err := tok.SignedString(priv)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	got, err := ParseAndVerifyJWT(signed)
+	if err != nil {
+		t.Fatalf("expected token with array audience to verify successfully, got: %v", err)
+	}
+	if got["realm"] != "dev" {
+		t.Fatalf("expected realm dev, got: %v", got["realm"])
+	}
+}

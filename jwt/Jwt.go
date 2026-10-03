@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -105,6 +106,76 @@ func extractRealmFromPath(path string) (string, error) {
 	return "", fmt.Errorf("issuer URL path does not contain 'realms' segment")
 }
 
+func isLoopback(host string) bool {
+	h := strings.ToLower(host)
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "host.docker.internal"
+}
+
+// isIssuerAllowed checks if the token's issuer matches any allowed configuration
+func isIssuerAllowed(tokenIssuer string) bool {
+	parsedIssuer, err := url.Parse(tokenIssuer)
+	if err != nil {
+		return false
+	}
+	issuerHost := parsedIssuer.Host
+	issuerHostname := parsedIssuer.Hostname()
+
+	// Gather all allowed targets from AUTH_URL and AUTH_ALLOWED_HOSTS
+	var allowedEntries []string
+	if authURL := os.Getenv("AUTH_URL"); authURL != "" {
+		for _, u := range strings.Split(authURL, ",") {
+			if trimmed := strings.TrimSpace(u); trimmed != "" {
+				allowedEntries = append(allowedEntries, trimmed)
+			}
+		}
+	}
+	if allowedHosts := os.Getenv("AUTH_ALLOWED_HOSTS"); allowedHosts != "" {
+		for _, h := range strings.Split(allowedHosts, ",") {
+			if trimmed := strings.TrimSpace(h); trimmed != "" {
+				allowedEntries = append(allowedEntries, trimmed)
+			}
+		}
+	}
+
+	if len(allowedEntries) == 0 {
+		return false
+	}
+
+	for _, entry := range allowedEntries {
+		targetHost := entry
+		targetHostname := entry
+
+		// If entry is a full URL, parse its host & hostname
+		if strings.HasPrefix(entry, "http://") || strings.HasPrefix(entry, "https://") {
+			if u, err := url.Parse(entry); err == nil {
+				targetHost = u.Host
+				targetHostname = u.Hostname()
+			}
+		} else if strings.Contains(entry, ":") {
+			if h, _, err := net.SplitHostPort(entry); err == nil {
+				targetHostname = h
+			}
+		}
+
+		// Exact host match (including port)
+		if strings.EqualFold(issuerHost, targetHost) {
+			return true
+		}
+
+		// Hostname-only match (ignores differing port numbers)
+		if strings.EqualFold(issuerHostname, targetHostname) {
+			return true
+		}
+
+		// Loopback equivalence (localhost == 127.0.0.1 == host.docker.internal)
+		if isLoopback(issuerHostname) && isLoopback(targetHostname) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 
 	// Step 1: Parse the JWT token without verifying the signature
@@ -123,20 +194,14 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	if !ok {
 		return jwt.MapClaims{}, fmt.Errorf("issuer (iss) not found in the token")
 	}
-	// issuer = strings.Replace(issuer, "localhost", "host.docker.internal", 1)
 
 	parsedUrl, err := url.Parse(issuer)
 	if err != nil {
 		return jwt.MapClaims{}, fmt.Errorf("issuer (iss) not found in the token")
 	}
-	baseUrlHost := parsedUrl.Host
-	parsedOrgUrl, err := url.Parse(os.Getenv("AUTH_URL"))
-	if err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("wrong base url")
-	}
-	parsedOrgUrlHost := parsedOrgUrl.Host
-	if baseUrlHost != parsedOrgUrlHost {
-		return jwt.MapClaims{}, fmt.Errorf("token not issued by %s", parsedOrgUrlHost)
+
+	if !isIssuerAllowed(issuer) {
+		return jwt.MapClaims{}, fmt.Errorf("token not issued by %s", os.Getenv("AUTH_URL"))
 	}
 
 	realm, err := extractRealmFromPath(parsedUrl.Path)
@@ -145,9 +210,15 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	}
 	claims["realm"] = realm
 
-	// Step 3: Extract the issuer and then the realm from it
-	_, ok = claims["aud"].(string)
-	if !ok {
+	// Validate audience format if present or if AUTH_AUDIENCE is specified
+	if audVal, exists := claims["aud"]; exists {
+		switch audVal.(type) {
+		case string, []interface{}, []string:
+			// valid audience type
+		default:
+			return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
+		}
+	} else if os.Getenv("AUTH_AUDIENCE") != "" {
 		return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
 	}
 
