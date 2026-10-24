@@ -1,4 +1,4 @@
-name: Go Vulnerability Check
+name: CI & Auto Release
 
 on:
   push:
@@ -23,3 +23,44 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
+  release-tag:
+    needs: govulncheck
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 🔄 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Check and Create Tag from .release
+        run: |
+          if [ ! -f .release ]; then
+            echo "ℹ️  No .release file found, skipping."
+            exit 0
+          fi
+
+          RAW_VERSION=$(cat .release | tr -d '[:space:]')
+          if [ -z "$RAW_VERSION" ]; then
+            echo "⚠️  .release file is empty, skipping."
+            exit 0
+          fi
+
+          if [[ "$RAW_VERSION" =~ ^v ]]; then
+            TAG="$RAW_VERSION"
+          else
+            TAG="v$RAW_VERSION"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "✅ Tag $TAG already exists. Nothing to do."
+          else
+            echo "🚀 New version detected! Creating and pushing tag: $TAG"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
