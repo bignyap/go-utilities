@@ -23,11 +23,15 @@ func TestStreamOptions(t *testing.T) {
 	if opts.Approx {
 		t.Errorf("expected default Approx false, got true")
 	}
+	if opts.Key != "" {
+		t.Errorf("expected default Key '', got '%s'", opts.Key)
+	}
 
 	// Test custom options
 	customOpts := applyStreamOptions([]StreamOption{
 		WithMaxLen(5000, true),
 		WithID("1234567890-0"),
+		WithKey("tenant-123"),
 	})
 	if customOpts.ID != "1234567890-0" {
 		t.Errorf("expected ID '1234567890-0', got '%s'", customOpts.ID)
@@ -37,6 +41,9 @@ func TestStreamOptions(t *testing.T) {
 	}
 	if !customOpts.Approx {
 		t.Errorf("expected Approx true, got false")
+	}
+	if customOpts.Key != "tenant-123" {
+		t.Errorf("expected Key 'tenant-123', got '%s'", customOpts.Key)
 	}
 }
 
@@ -49,7 +56,7 @@ func TestNoopStreamPublisher(t *testing.T) {
 		ID:        "evt-1",
 		Action:    "created",
 		Timestamp: 123456,
-	}, WithMaxLen(100, true))
+	}, WithMaxLen(100, true), WithKey("tenant-abc"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

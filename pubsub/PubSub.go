@@ -17,11 +17,11 @@ func NewPubSub(cfg Config) (PubSubClient, error) {
 			return nil, errors.New("missing Redis config")
 		}
 		return NewRedisPubSub(cfg)
-	// case "kafka":
-	// 	if cfg.Kafka == nil {
-	// 		return nil, errors.New("missing Kafka config")
-	// 	}
-	// 	return NewKafkaPubSub(cfg)
+	case "kafka":
+		if cfg.Kafka == nil {
+			return nil, errors.New("missing Kafka config")
+		}
+		return NewKafkaPubSub(cfg)
 	// case "rabbitmq":
 	// 	if cfg.RabbitMQ == nil {
 	// 		return nil, errors.New("missing RabbitMQ config")

@@ -9,17 +9,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// StreamOptions contains options for Redis Stream XADD operations.
+// StreamOptions contains options for Redis Stream XADD and Kafka message operations.
 type StreamOptions struct {
-	MaxLen int64  // Maximum length of the stream (trimmed when exceeded)
+	MaxLen int64  // Maximum length of the stream (trimmed when exceeded, Redis only)
 	Approx bool   // Use approximate trimming (~ in Redis) for O(1) performance
 	ID     string // Message ID, defaults to "*" (Redis auto-generated timestamp-sequence)
+	Key    string // Partition key for Kafka (or key field in Redis)
 }
 
 // StreamOption is a functional option for configuring StreamOptions.
 type StreamOption func(*StreamOptions)
 
-// WithMaxLen configures stream capping with MAXLEN.
+// WithMaxLen configures stream capping with MAXLEN (Redis only).
 // When approx is true, Redis uses MAXLEN ~ which is significantly faster.
 func WithMaxLen(maxLen int64, approx bool) StreamOption {
 	return func(o *StreamOptions) {
@@ -28,23 +29,30 @@ func WithMaxLen(maxLen int64, approx bool) StreamOption {
 	}
 }
 
-// WithID specifies a custom message ID (defaults to "*" for auto-generation).
+// WithID specifies a custom message ID (defaults to "*" for auto-generation in Redis).
 func WithID(id string) StreamOption {
 	return func(o *StreamOptions) {
 		o.ID = id
 	}
 }
 
-// StreamPublisher publishes messages to Redis Streams.
+// WithKey sets the message key (used as partition key in Kafka, or key field in Redis).
+func WithKey(key string) StreamOption {
+	return func(o *StreamOptions) {
+		o.Key = key
+	}
+}
+
+// StreamPublisher publishes messages to Redis Streams or Kafka topics.
 type StreamPublisher interface {
-	// PublishStream publishes an event or arbitrary payload to a stream.
+	// PublishStream publishes an event or arbitrary payload to a stream/topic.
 	// If message is a map[string]interface{} or map[string]string, it is used directly as field-value pairs.
 	// If message is []byte or string, it is stored under the "payload" key.
 	// Otherwise, message is JSON-marshaled and stored under the "payload" key.
-	// Returns the generated message ID.
+	// Returns the generated message ID (e.g. "1719324567890-0" for Redis, "0:1042" for Kafka).
 	PublishStream(ctx context.Context, stream string, message interface{}, opts ...StreamOption) (string, error)
 
-	// PublishStreamMap publishes explicit key-value fields to a stream.
+	// PublishStreamMap publishes explicit key-value fields to a stream/topic.
 	// Returns the generated message ID.
 	PublishStreamMap(ctx context.Context, stream string, values map[string]interface{}, opts ...StreamOption) (string, error)
 }
@@ -135,6 +143,10 @@ func (p *redisStreamPublisher) PublishStreamMap(ctx context.Context, stream stri
 	}
 
 	options := applyStreamOptions(opts)
+
+	if options.Key != "" && values["key"] == nil {
+		values["key"] = options.Key
+	}
 
 	args := &redis.XAddArgs{
 		Stream: p.prefixed(stream),

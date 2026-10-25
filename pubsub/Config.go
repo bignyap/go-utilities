@@ -16,9 +16,12 @@ type RedisConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers []string
-	GroupID string
-	Topic   string
+	Brokers  []string
+	GroupID  string
+	Topic    string
+	Username string
+	Password string
+	UseTLS   bool
 }
 
 type RabbitMQConfig struct {
