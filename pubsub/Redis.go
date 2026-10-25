@@ -12,8 +12,9 @@ import (
 )
 
 type RedisPubSub struct {
-	rdb       *redis.Client
+	rdb       redis.UniversalClient
 	namespace string
+	streamPub StreamPublisher
 }
 
 func NewRedisPubSub(cfg Config) (PubSubClient, error) {
@@ -45,6 +46,7 @@ func NewRedisPubSub(cfg Config) (PubSubClient, error) {
 	return &RedisPubSub{
 		rdb:       rdb,
 		namespace: cfg.Namespace,
+		streamPub: NewRedisStreamPublisher(rdb, cfg.Namespace),
 	}, nil
 }
 
@@ -76,6 +78,21 @@ func (r *RedisPubSub) Subscribe(ctx context.Context, channel string, handler Mes
 		}
 	}()
 	return nil
+}
+
+// PublishStream publishes an event or arbitrary payload to a Redis stream.
+func (r *RedisPubSub) PublishStream(ctx context.Context, stream string, message interface{}, opts ...StreamOption) (string, error) {
+	return r.streamPub.PublishStream(ctx, stream, message, opts...)
+}
+
+// PublishStreamMap publishes explicit key-value fields to a Redis stream.
+func (r *RedisPubSub) PublishStreamMap(ctx context.Context, stream string, values map[string]interface{}, opts ...StreamOption) (string, error) {
+	return r.streamPub.PublishStreamMap(ctx, stream, values, opts...)
+}
+
+// Redis returns the underlying Redis UniversalClient.
+func (r *RedisPubSub) Redis() redis.UniversalClient {
+	return r.rdb
 }
 
 func (r *RedisPubSub) Close() error {

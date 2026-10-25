@@ -37,6 +37,7 @@ func NewPubSub(cfg Config) (PubSubClient, error) {
 type PubSubClient interface {
 	Publish(ctx context.Context, channel string, message interface{}) error
 	Subscribe(ctx context.Context, channel string, handler MessageHandler) error
+	StreamPublisher
 	Close() error
 }
 
