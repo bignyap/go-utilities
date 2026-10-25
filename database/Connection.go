@@ -47,11 +47,12 @@ type ConnectionString struct {
 }
 
 type ConnectionPoolConfig struct {
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxIdleTime time.Duration
-	ConnMaxLifetime time.Duration
-	EnableTelemetry bool // Enable OpenTelemetry tracing for database operations
+	MaxOpenConns       int
+	MaxIdleConns       int
+	ConnMaxIdleTime    time.Duration
+	ConnMaxLifetime    time.Duration
+	EnableTelemetry    bool // Enable OpenTelemetry tracing for database operations
+	EnableTenantScoped bool // Enable automatic PostgreSQL tenant isolation hooks
 }
 
 func DefaultPoolConfig() *ConnectionPoolConfig {
@@ -154,6 +155,11 @@ func (c *Connection) Connect() error {
 		}
 
 		cfg.MaxConns = int32(c.PoolConfig.MaxOpenConns)
+
+		// Enable automatic tenant context scoping on acquired connections if explicitly enabled
+		if c.PoolConfig.EnableTenantScoped {
+			ConfigureTenantPool(cfg)
+		}
 
 		// Add OpenTelemetry tracing if enabled
 		if c.PoolConfig.EnableTelemetry {
