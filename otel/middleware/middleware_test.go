@@ -28,3 +28,4 @@ func TestMiddleware_NilProviderSafety(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "pong", w.Body.String())
 }
+
