@@ -207,6 +207,15 @@ func (k *KafkaPubSub) PublishStreamMap(ctx context.Context, stream string, value
 	return k.streamPub.PublishStreamMap(ctx, stream, values, opts...)
 }
 
+func (k *KafkaPubSub) ConsumeStream(ctx context.Context, stream, group, consumer string, handler StreamMessageHandler, opts ...ConsumerOption) error {
+	return k.Subscribe(ctx, stream, func(ctx context.Context, payload []byte) error {
+		return handler(ctx, &StreamMessage{
+			Stream: stream,
+			Values: map[string]interface{}{"payload": string(payload)},
+		})
+	})
+}
+
 func (k *KafkaPubSub) Producer() sarama.SyncProducer {
 	return k.producer
 }

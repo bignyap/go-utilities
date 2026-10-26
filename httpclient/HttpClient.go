@@ -6,6 +6,7 @@ package httpclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -38,6 +39,7 @@ type Client interface {
 	Delete(path string) error
 	WithOverrideBaseURL(url string) Client
 	DoRequest(method, path string, queryParams map[string]string, requestBody any, responseBody any, headers map[string]string) error
+	DoRequestWithContext(ctx context.Context, method, path string, queryParams map[string]string, requestBody any, responseBody any, headers map[string]string) error
 	DownloadToFile(method, path string, queryParams map[string]string, body any, outputDir string, headers []string) (*DownloadFileResponse, error)
 }
 
@@ -158,9 +160,19 @@ func NewHystixClient(baseURL string, config ClientConfig, fallbackFn func(error)
 		httpclient.WithRetrier(heimdall.NewRetrier(bo)),
 	)
 
+	commandName := config.CircuitBreakerCommand
+	if (commandName == "" || commandName == "http-client") && baseURL != "" {
+		if u, parseErr := url.Parse(baseURL); parseErr == nil && u.Host != "" {
+			commandName = "http-client-" + u.Host
+		}
+	}
+	if commandName == "" {
+		commandName = "http-client"
+	}
+
 	hystrixClient := hystrix.NewClient(
 		hystrix.WithHTTPClient(httpClient),
-		hystrix.WithCommandName(config.CircuitBreakerCommand),
+		hystrix.WithCommandName(commandName),
 		hystrix.WithHystrixTimeout(config.CircuitBreakerTimeout),
 		hystrix.WithMaxConcurrentRequests(config.MaxConcurrentRequests),
 		hystrix.WithErrorPercentThreshold(config.ErrorPercentThreshold),
@@ -213,10 +225,18 @@ func (t *TracingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // from request context to X-Trace-ID header. Use this for simple HTTP clients without
 // circuit breaker or retry logic.
 func NewTracingHTTPClient(timeout time.Duration) *http.Client {
+	var baseRoundTripper http.RoundTripper = http.DefaultTransport
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		tClone := dt.Clone()
+		tClone.MaxIdleConns = 100
+		tClone.MaxIdleConnsPerHost = 50
+		tClone.IdleConnTimeout = 90 * time.Second
+		baseRoundTripper = tClone
+	}
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &TracingRoundTripper{
-			Base: http.DefaultTransport,
+			Base: baseRoundTripper,
 		},
 	}
 }
@@ -258,8 +278,16 @@ func (c *circuitClient) WithOverrideBaseURL(baseURL string) Client {
 	}
 }
 
-// Core unified request method.
+// DoRequest is a convenience method that calls DoRequestWithContext with context.Background().
 func (c *circuitClient) DoRequest(method, path string, queryParams map[string]string, requestBody any, responseBody any, headers map[string]string) error {
+	return c.DoRequestWithContext(context.Background(), method, path, queryParams, requestBody, responseBody, headers)
+}
+
+// DoRequestWithContext is the core unified request method with context cancellation and tracing support.
+func (c *circuitClient) DoRequestWithContext(ctx context.Context, method, path string, queryParams map[string]string, requestBody any, responseBody any, headers map[string]string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var body io.Reader
 	switch v := requestBody.(type) {
 	case nil:
@@ -279,7 +307,7 @@ func (c *circuitClient) DoRequest(method, path string, queryParams map[string]st
 	}
 	finalURL = InjectQueryParams(finalURL, queryParams)
 
-	req, err := http.NewRequest(method, finalURL, body)
+	req, err := http.NewRequestWithContext(ctx, method, finalURL, body)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -428,7 +456,24 @@ func createCustomTransport(cfg TLSClientConfig) (*http.Transport, error) {
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 
-	return &http.Transport{TLSClientConfig: tlsConfig}, nil
+	// Clone DefaultTransport to preserve Dialer, KeepAlive, HTTP/2, and Proxies
+	var transport *http.Transport
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = dt.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+
+	transport.TLSClientConfig = tlsConfig
+	if transport.MaxIdleConns == 0 {
+		transport.MaxIdleConns = 100
+	}
+	transport.MaxIdleConnsPerHost = 50
+	if transport.IdleConnTimeout == 0 {
+		transport.IdleConnTimeout = 90 * time.Second
+	}
+
+	return transport, nil
 }
 
 // Tries all supported mTLS sources in priority order.

@@ -27,6 +27,10 @@ func OtelMiddlewareWithConfig(serviceName string, provider api.Provider, opts ..
 // CustomSpanMiddleware creates a custom span for each request with additional attributes
 func CustomSpanMiddleware(provider api.Provider) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if provider == nil {
+			c.Next()
+			return
+		}
 		tracer := provider.Tracer("gin-http-server")
 
 		ctx, span := tracer.Start(c.Request.Context(), fmt.Sprintf("%s %s", c.Request.Method, c.FullPath()),
@@ -63,6 +67,11 @@ func CustomSpanMiddleware(provider api.Provider) gin.HandlerFunc {
 
 // MetricsMiddleware records HTTP metrics for each request
 func MetricsMiddleware(provider api.Provider) gin.HandlerFunc {
+	if provider == nil {
+		return func(c *gin.Context) {
+			c.Next()
+		}
+	}
 	meter := provider.Meter("gin-http-server")
 
 	// Create metrics

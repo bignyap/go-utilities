@@ -164,6 +164,14 @@ func WithTenantTx(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn f
 }
 
 // WithTenantReadOnlyTx executes fn within a read-only tenant transaction.
+// WithTenantTxContext executes fn inside a tenant-isolated transaction, passing the transaction-injected context to fn.
+func WithTenantTxContext(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(ctx context.Context, tx pgx.Tx) error, opts ...TenantTxOption) error {
+	return WithTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		ctxWithTx := ContextWithTx(ContextWithTenantID(ctx, tenantID), tx)
+		return fn(ctxWithTx, tx)
+	}, opts...)
+}
+
 func WithTenantReadOnlyTx(ctx context.Context, pool *pgxpool.Pool, tenantID string, fn func(tx pgx.Tx) error, opts ...TenantTxOption) error {
 	allOpts := append([]TenantTxOption{WithReadOnly()}, opts...)
 	return WithTenantTx(ctx, pool, tenantID, fn, allOpts...)
@@ -228,10 +236,18 @@ func ConfigureTenantPool(cfg *pgxpool.Config) {
 			if _, err := conn.Exec(ctx, "SELECT set_config($1, $2, false)", DefaultTenantSetting, tenantID); err != nil {
 				return false
 			}
+		} else {
+			if _, err := conn.Exec(ctx, "SELECT set_config($1, '', false)", DefaultTenantSetting); err != nil {
+				return false
+			}
 		}
 
 		if IsBypassRLSFromContext(ctx) {
 			if _, err := conn.Exec(ctx, "SELECT set_config($1, 'true', false)", DefaultBypassRLSSetting); err != nil {
+				return false
+			}
+		} else {
+			if _, err := conn.Exec(ctx, "SELECT set_config($1, '', false)", DefaultBypassRLSSetting); err != nil {
 				return false
 			}
 		}

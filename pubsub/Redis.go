@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -12,9 +13,12 @@ import (
 )
 
 type RedisPubSub struct {
-	rdb       redis.UniversalClient
-	namespace string
-	streamPub StreamPublisher
+	rdb            redis.UniversalClient
+	namespace      string
+	streamPub      StreamPublisher
+	streamConsumer StreamConsumer
+	mu             sync.Mutex
+	subs           []*redis.PubSub
 }
 
 func NewRedisPubSub(cfg Config) (PubSubClient, error) {
@@ -44,9 +48,11 @@ func NewRedisPubSub(cfg Config) (PubSubClient, error) {
 	}
 
 	return &RedisPubSub{
-		rdb:       rdb,
-		namespace: cfg.Namespace,
-		streamPub: NewRedisStreamPublisher(rdb, cfg.Namespace),
+		rdb:            rdb,
+		namespace:      cfg.Namespace,
+		streamPub:      NewRedisStreamPublisher(rdb, cfg.Namespace),
+		streamConsumer: NewRedisStreamConsumer(rdb, cfg.Namespace),
+		subs:           make([]*redis.PubSub, 0),
 	}, nil
 }
 
@@ -69,15 +75,35 @@ func (r *RedisPubSub) Subscribe(ctx context.Context, channel string, handler Mes
 	sub := r.rdb.Subscribe(ctx, r.prefixed(channel))
 	ch := sub.Channel()
 
+	r.mu.Lock()
+	r.subs = append(r.subs, sub)
+	r.mu.Unlock()
+
 	go func() {
-		for msg := range ch {
-			err := handler(ctx, []byte(msg.Payload))
-			if err != nil {
-				log.Printf("pubsub handler error on channel %s: %v", channel, err)
+		defer func() {
+			_ = sub.Close()
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				err := handler(ctx, []byte(msg.Payload))
+				if err != nil {
+					log.Printf("pubsub handler error on channel %s: %v", channel, err)
+				}
 			}
 		}
 	}()
 	return nil
+}
+
+// ConsumeStream reads messages from a Redis stream using a consumer group.
+func (r *RedisPubSub) ConsumeStream(ctx context.Context, stream, group, consumer string, handler StreamMessageHandler, opts ...ConsumerOption) error {
+	return r.streamConsumer.ConsumeStream(ctx, stream, group, consumer, handler, opts...)
 }
 
 // PublishStream publishes an event or arbitrary payload to a Redis stream.
@@ -96,5 +122,11 @@ func (r *RedisPubSub) Redis() redis.UniversalClient {
 }
 
 func (r *RedisPubSub) Close() error {
+	r.mu.Lock()
+	for _, s := range r.subs {
+		_ = s.Close()
+	}
+	r.subs = nil
+	r.mu.Unlock()
 	return r.rdb.Close()
 }

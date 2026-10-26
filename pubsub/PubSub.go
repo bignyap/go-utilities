@@ -38,6 +38,7 @@ type PubSubClient interface {
 	Publish(ctx context.Context, channel string, message interface{}) error
 	Subscribe(ctx context.Context, channel string, handler MessageHandler) error
 	StreamPublisher
+	StreamConsumer
 	Close() error
 }
 

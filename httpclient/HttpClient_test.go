@@ -1,10 +1,12 @@
 package httpclient_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bignyap/go-utilities/httpclient"
 )
@@ -42,5 +44,43 @@ func TestPost_Success(t *testing.T) {
 	}
 	if res.Status != "ok" {
 		t.Errorf("expected status ok, got %s", res.Status)
+	}
+}
+
+func TestDoRequestWithContext_Cancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := httpclient.NewHystixClient(server.URL, httpclient.ClientConfig{
+		RetryCount: 1,
+	}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := client.DoRequestWithContext(ctx, http.MethodGet, "/slow", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error due to context cancellation, got nil")
+	}
+}
+
+func TestNewTracingHTTPClient_Pooled(t *testing.T) {
+	client := httpclient.NewTracingHTTPClient(5 * time.Second)
+	if client == nil {
+		t.Fatal("expected non-nil tracing HTTP client")
+	}
+	tr, ok := client.Transport.(*httpclient.TracingRoundTripper)
+	if !ok {
+		t.Fatal("expected TracingRoundTripper")
+	}
+	baseTransport, ok := tr.Base.(*http.Transport)
+	if !ok {
+		t.Fatal("expected *http.Transport as base")
+	}
+	if baseTransport.MaxIdleConnsPerHost != 50 {
+		t.Errorf("expected MaxIdleConnsPerHost to be 50, got %d", baseTransport.MaxIdleConnsPerHost)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -165,4 +167,173 @@ func (p *redisStreamPublisher) PublishStreamMap(ctx context.Context, stream stri
 	}
 
 	return id, nil
+}
+
+// ============================================================================
+// Stream Consumer (Consumer Groups)
+// ============================================================================
+
+// StreamMessage represents a message read from a stream.
+type StreamMessage struct {
+	ID     string
+	Stream string
+	Values map[string]interface{}
+}
+
+// PayloadBytes extracts the "payload" field as []byte.
+func (m *StreamMessage) PayloadBytes() []byte {
+	if m == nil || m.Values == nil {
+		return nil
+	}
+	if p, ok := m.Values["payload"]; ok {
+		switch v := p.(type) {
+		case string:
+			return []byte(v)
+		case []byte:
+			return v
+		default:
+			b, _ := json.Marshal(v)
+			return b
+		}
+	}
+	b, _ := json.Marshal(m.Values)
+	return b
+}
+
+// StreamMessageHandler processes messages consumed from a stream.
+type StreamMessageHandler func(ctx context.Context, msg *StreamMessage) error
+
+// ConsumerOptions configures stream consumer behavior.
+type ConsumerOptions struct {
+	BatchSize   int64
+	BlockTime   time.Duration
+	AutoAck     bool
+	StartFromID string
+}
+
+// ConsumerOption is a functional option for ConsumerOptions.
+type ConsumerOption func(*ConsumerOptions)
+
+// WithConsumerBatchSize sets the max message batch count per poll.
+func WithConsumerBatchSize(batchSize int64) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		if batchSize > 0 {
+			o.BatchSize = batchSize
+		}
+	}
+}
+
+// WithConsumerBlockTime sets the timeout for blocking read.
+func WithConsumerBlockTime(block time.Duration) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		if block > 0 {
+			o.BlockTime = block
+		}
+	}
+}
+
+// WithConsumerAutoAck configures whether messages are automatically ACKed on success.
+func WithConsumerAutoAck(autoAck bool) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		o.AutoAck = autoAck
+	}
+}
+
+// WithConsumerStartFromID sets the starting ID when creating the group (e.g. "0", "$", ">").
+func WithConsumerStartFromID(startID string) ConsumerOption {
+	return func(o *ConsumerOptions) {
+		if startID != "" {
+			o.StartFromID = startID
+		}
+	}
+}
+
+// StreamConsumer provides consumer group consumption on Redis Streams.
+type StreamConsumer interface {
+	ConsumeStream(ctx context.Context, stream, group, consumer string, handler StreamMessageHandler, opts ...ConsumerOption) error
+}
+
+type redisStreamConsumer struct {
+	rdb       redis.UniversalClient
+	namespace string
+}
+
+// NewRedisStreamConsumer creates a new Redis-backed StreamConsumer.
+func NewRedisStreamConsumer(rdb redis.UniversalClient, namespace string) StreamConsumer {
+	return &redisStreamConsumer{
+		rdb:       rdb,
+		namespace: namespace,
+	}
+}
+
+func (c *redisStreamConsumer) prefixed(stream string) string {
+	if c.namespace == "" {
+		return stream
+	}
+	return fmt.Sprintf("%s:%s", c.namespace, stream)
+}
+
+func (c *redisStreamConsumer) ConsumeStream(ctx context.Context, stream, group, consumer string, handler StreamMessageHandler, opts ...ConsumerOption) error {
+	options := ConsumerOptions{
+		BatchSize:   10,
+		BlockTime:   2 * time.Second,
+		AutoAck:     true,
+		StartFromID: "$",
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+
+	prefixedStream := c.prefixed(stream)
+
+	// Ensure group exists
+	if err := c.rdb.XGroupCreateMkStream(ctx, prefixedStream, group, options.StartFromID).Err(); err != nil {
+		if !errors.Is(err, redis.Nil) && !strings.Contains(err.Error(), "BUSYGROUP") {
+			return fmt.Errorf("failed to create consumer group: %w", err)
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		res, err := c.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    group,
+			Consumer: consumer,
+			Streams:  []string{prefixedStream, ">"},
+			Count:    options.BatchSize,
+			Block:    options.BlockTime,
+		}).Result()
+
+		if err != nil {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		for _, s := range res {
+			for _, m := range s.Messages {
+				msg := &StreamMessage{
+					ID:     m.ID,
+					Stream: stream,
+					Values: m.Values,
+				}
+
+				handleErr := handler(ctx, msg)
+				if handleErr == nil && options.AutoAck {
+					_ = c.rdb.XAck(ctx, prefixedStream, group, m.ID).Err()
+				}
+			}
+		}
+	}
 }

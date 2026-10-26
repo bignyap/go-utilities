@@ -59,6 +59,20 @@ func TestNewRelay_Options(t *testing.T) {
 		assert.False(t, relay.config.DeleteOnSuccess)
 	})
 
+	t.Run("dlq options", func(t *testing.T) {
+		deadLetterCalled := false
+		relay := NewRelay(nil, pub, nil,
+			WithDLQStream("outbox:dead-letter"),
+			WithOnDeadLetter(func(ctx context.Context, rec OutboxEventRecord, err error) {
+				deadLetterCalled = true
+			}),
+		)
+		assert.Equal(t, "outbox:dead-letter", relay.config.DLQStream)
+		assert.NotNil(t, relay.config.OnDeadLetter)
+		relay.config.OnDeadLetter(context.Background(), OutboxEventRecord{ID: 1}, nil)
+		assert.True(t, deadLetterCalled)
+	})
+
 	t.Run("start validates nil pool or publisher", func(t *testing.T) {
 		ctx := context.Background()
 

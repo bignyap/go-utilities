@@ -238,7 +238,15 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	// Find the corresponding key
 	key, found := jwks.LookupKeyID(kid)
 	if !found {
-		return jwt.MapClaims{}, fmt.Errorf("key ID not found in the certificate endpoint")
+		// Attempt cache refresh in case key rotation occurred
+		certCache.Delete(issuer)
+		if refreshedJWKS, refErr := getJWKSet(issuer); refErr == nil {
+			jwks = refreshedJWKS
+			key, found = jwks.LookupKeyID(kid)
+		}
+		if !found {
+			return jwt.MapClaims{}, fmt.Errorf("key ID not found in the certificate endpoint")
+		}
 	}
 
 	// Extract the public key

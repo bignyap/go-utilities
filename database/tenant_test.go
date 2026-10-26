@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,9 +33,15 @@ func TestWithTenantTx_Validations(t *testing.T) {
 	assert.Contains(t, err.Error(), "pgxpool cannot be nil")
 
 	// Empty tenantID should return error
-	// Note: We test passing nil pool with empty tenant ID
 	err = WithTenantTx(ctx, nil, "", nil)
 	assert.Error(t, err)
+
+	// WithTenantTxContext validation with nil pool
+	err = WithTenantTxContext(ctx, nil, "valid-uuid", func(c context.Context, tx pgx.Tx) error {
+		return nil
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "pgxpool cannot be nil")
 }
 
 func TestGetDBTX_Fallback(t *testing.T) {
@@ -44,4 +51,12 @@ func TestGetDBTX_Fallback(t *testing.T) {
 	var fallback DBTX = nil
 	result := GetDBTX(ctx, fallback)
 	assert.Nil(t, result)
+}
+
+func TestBypassRLSContext(t *testing.T) {
+	ctx := context.Background()
+	assert.False(t, IsBypassRLSFromContext(ctx))
+
+	ctxBypass := ContextWithBypassRLS(ctx)
+	assert.True(t, IsBypassRLSFromContext(ctxBypass))
 }

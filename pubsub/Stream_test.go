@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 type sampleTestEvent struct {
@@ -116,5 +117,70 @@ func TestNoopPubSubImplementsBoth(t *testing.T) {
 	id, err := streamPub.PublishStream(ctx, "test", "hello")
 	if err != nil || id != "0-0" {
 		t.Errorf("expected id '0-0' and nil error, got id='%s', err=%v", id, err)
+	}
+}
+
+func TestStreamMessage_PayloadBytes(t *testing.T) {
+	// String payload
+	msg1 := &StreamMessage{
+		ID:     "1-0",
+		Stream: "test",
+		Values: map[string]interface{}{"payload": "hello world"},
+	}
+	if string(msg1.PayloadBytes()) != "hello world" {
+		t.Errorf("expected 'hello world', got '%s'", string(msg1.PayloadBytes()))
+	}
+
+	// Bytes payload
+	msg2 := &StreamMessage{
+		ID:     "2-0",
+		Stream: "test",
+		Values: map[string]interface{}{"payload": []byte("byte slice")},
+	}
+	if string(msg2.PayloadBytes()) != "byte slice" {
+		t.Errorf("expected 'byte slice', got '%s'", string(msg2.PayloadBytes()))
+	}
+
+	// Arbitrary values fallback
+	msg3 := &StreamMessage{
+		ID:     "3-0",
+		Stream: "test",
+		Values: map[string]interface{}{"key": "val"},
+	}
+	if len(msg3.PayloadBytes()) == 0 {
+		t.Errorf("expected non-empty bytes for fallback payload")
+	}
+}
+
+func TestConsumerOptions(t *testing.T) {
+	opts := ConsumerOptions{
+		BatchSize:   10,
+		BlockTime:   2 * time.Second,
+		AutoAck:     true,
+		StartFromID: "$",
+	}
+
+	optFuncs := []ConsumerOption{
+		WithConsumerBatchSize(50),
+		WithConsumerBlockTime(5 * time.Second),
+		WithConsumerAutoAck(false),
+		WithConsumerStartFromID("0"),
+	}
+
+	for _, fn := range optFuncs {
+		fn(&opts)
+	}
+
+	if opts.BatchSize != 50 {
+		t.Errorf("expected BatchSize 50, got %d", opts.BatchSize)
+	}
+	if opts.BlockTime != 5*time.Second {
+		t.Errorf("expected BlockTime 5s, got %v", opts.BlockTime)
+	}
+	if opts.AutoAck != false {
+		t.Errorf("expected AutoAck false, got true")
+	}
+	if opts.StartFromID != "0" {
+		t.Errorf("expected StartFromID '0', got '%s'", opts.StartFromID)
 	}
 }

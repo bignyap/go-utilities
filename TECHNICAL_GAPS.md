@@ -27,19 +27,19 @@ Several **Critical** architectural deficiencies and security vulnerabilities wer
 | **SEC-01** | Safety / Security | **CRITICAL** | `kgb-ai-rag` | SQL Injection via unescaped metadata filter keys |
 | **SEC-02** | Multi-Tenancy | **CRITICAL** | `kgb-ai-rag` | Unauthenticated, LLM-controlled `tenant_id` in MCP tools |
 | **ARC-01** | Job Queuing | **CRITICAL** | `kgb-ai-workers` / `pubsub` | Redis Pub/Sub fanout used as queue; duplicate executions & data races |
-| **REL-01** | PubSub / Outbox | **CRITICAL** | `go-utilities/outbox` | Poison-pill events silently dropped without DLQ or tombstoning |
+| **REL-01** | PubSub / Outbox | **CRITICAL** | `go-utilities/outbox` | **[RESOLVED]** Added DLQStream option, OnDeadLetter callback, and retry dead-letter tombstoning |
 | **BUG-01** | Agent Execution | **CRITICAL** | `kgb-ai-agents` | Summarizer agent crashes with `RuntimeError: This event loop is already running` |
-| **NET-01** | HTTP Resiliency | **HIGH** | `go-utilities/httpclient` | Custom transport strips connection pooling; shared Hystrix command name |
-| **CTX-01** | Observability | **HIGH** | `go-utilities/httpclient` | `DoRequest` lacks `context.Context`; breaks cancellation & tracing |
-| **DB-01** | Multi-Tenancy / DB | **HIGH** | `go-utilities/database` | Tenant pool session contamination on release failure; high roundtrip overhead |
+| **NET-01** | HTTP Resiliency | **HIGH** | `go-utilities/httpclient` | **[RESOLVED]** Cloned DefaultTransport, pooled conns (100 total / 50 per host), host-scoped Hystrix commands |
+| **CTX-01** | Observability | **HIGH** | `go-utilities/httpclient` | **[RESOLVED]** Added `DoRequestWithContext` respecting context cancellation and distributed tracing headers |
+| **DB-01** | Multi-Tenancy / DB | **HIGH** | `go-utilities/database` | **[RESOLVED]** Enforced explicit reset of tenant and bypass session variables on un-contexted acquire; added `WithTenantTxContext` |
 | **LLM-01** | LLM Integration | **HIGH** | `kgb-ai-agents` / `kgb-ai-rag` | Fallback models and providers completely absent; no rate-limit (429) backoff |
 | **SAF-01** | Safety / Prompt Inj | **HIGH** | `kgb-ai-agents` | Guardrails inspect empty action objects; prompt injection defense absent |
 | **STB-01** | Architecture | **HIGH** | `kgb-ai-agent-api` | Asynchronous task execution (`ScheduleTask`) is a non-functional stub |
 | **STB-02** | Worker Logic | **HIGH** | `kgb-ai-workers` | Delayed retry is a no-op; worker status & results never persisted |
 | **CTR-01** | Contracts | **HIGH** | Inter-Service | Incompatible schemas between `Event` (messaging/CRM) and `Job` (AI workers) |
-| **DB-02** | DB Resiliency | **MEDIUM** | `go-utilities/database` | `ConnMaxIdleTime` and `ConnMaxLifetime` ignored for `pgxpool` |
-| **TEL-01** | Telemetry | **MEDIUM** | `go-utilities/otel` | Nil pointer panics in `MetricsMiddleware` and `CustomSpanMiddleware` |
-| **AUTH-01** | Authentication | **MEDIUM** | `go-utilities/jwt` | Static 1-hour JWKS caching without key refresh on ID mismatch |
+| **DB-02** | DB Resiliency | **MEDIUM** | `go-utilities/database` | **[RESOLVED]** Configured MaxConnIdleTime, MaxConnLifetime, and MinConns on pgxpool |
+| **TEL-01** | Telemetry | **MEDIUM** | `go-utilities/otel` | **[RESOLVED]** Added nil provider defensive guards to CustomSpanMiddleware and MetricsMiddleware |
+| **AUTH-01** | Authentication | **MEDIUM** | `go-utilities/jwt` | **[RESOLVED]** Added automatic cache invalidation and single-flight refresh on unknown kid in JWT verification |
 | **WS-01** | WebSockets | **MEDIUM** | `go-utilities/websocket` | In-memory only hub without distributed Redis pubsub backplane |
 | **CTR-02** | Serialization | **MEDIUM** | `kgb-ai-agent-api` | Lossy `fmt.Sprintf("%v", v)` protobuf conversion corrupts nested structures |
 | **COST-01** | Monitoring | **LOW** | `kgb-ai-agents` | Hardcoded dummy `$0.01` cost increment per task step |

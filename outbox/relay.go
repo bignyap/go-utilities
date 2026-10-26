@@ -34,6 +34,8 @@ type RelayConfig struct {
 	ChannelName     string
 	MaxRetries      int
 	DeleteOnSuccess bool
+	DLQStream       string
+	OnDeadLetter    func(ctx context.Context, rec OutboxEventRecord, err error)
 }
 
 // RelayOption is a functional option for configuring Relay.
@@ -82,6 +84,20 @@ func WithDeleteOnSuccess(delete bool) RelayOption {
 	}
 }
 
+// WithDLQStream configures a Redis Stream to publish events that exceed MaxRetries.
+func WithDLQStream(stream string) RelayOption {
+	return func(c *RelayConfig) {
+		c.DLQStream = stream
+	}
+}
+
+// WithOnDeadLetter registers a callback invoked when an event permanently fails and exceeds MaxRetries.
+func WithOnDeadLetter(fn func(ctx context.Context, rec OutboxEventRecord, err error)) RelayOption {
+	return func(c *RelayConfig) {
+		c.OnDeadLetter = fn
+	}
+}
+
 // OutboxEventRecord represents an outbox row queried for dispatch.
 type OutboxEventRecord struct {
 	ID         int64
@@ -89,6 +105,7 @@ type OutboxEventRecord struct {
 	EventKey   string
 	EventType  string
 	Payload    []byte
+	RetryCount int
 }
 
 // Relay is the worker responsible for pulling events from the outbox table and pushing them to Redis Streams.
@@ -216,7 +233,7 @@ func (r *Relay) listenAndDrain(ctx context.Context) error {
 }
 
 const selectBatchSQL = `
-SELECT id, stream_name, COALESCE(event_key, ''), event_type, payload
+SELECT id, stream_name, COALESCE(event_key, ''), event_type, payload, retry_count
 FROM outbox_events
 WHERE processed_at IS NULL AND retry_count < $2
 ORDER BY id ASC
@@ -258,7 +275,7 @@ func (r *Relay) drainBatch(ctx context.Context) (int, error) {
 	var records []OutboxEventRecord
 	for rows.Next() {
 		var rec OutboxEventRecord
-		if err := rows.Scan(&rec.ID, &rec.StreamName, &rec.EventKey, &rec.EventType, &rec.Payload); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.StreamName, &rec.EventKey, &rec.EventType, &rec.Payload, &rec.RetryCount); err != nil {
 			return 0, fmt.Errorf("failed to scan outbox record: %w", err)
 		}
 		records = append(records, rec)
@@ -294,9 +311,38 @@ func (r *Relay) drainBatch(ctx context.Context) (int, error) {
 				api.String("event_type", rec.EventType),
 				api.String("error", pubErr.Error()),
 			)
-			// Increment retry count inside the transaction
-			if _, execErr := tx.Exec(ctx, updateRetrySQL, rec.ID, pubErr.Error()); execErr != nil {
-				r.logError(ctx, "Failed to update outbox event retry count", execErr, api.Int64("event_id", rec.ID))
+
+			// If the event has reached max retries, move to dead letter queue
+			if rec.RetryCount+1 >= r.config.MaxRetries {
+				r.logError(ctx, "Outbox event exceeded max retries, moving to dead-letter queue", pubErr,
+					api.Int64("event_id", rec.ID),
+					api.String("stream", rec.StreamName),
+					api.String("event_type", rec.EventType),
+				)
+				if r.config.DLQStream != "" {
+					dlqPayload := map[string]interface{}{
+						"original_id":     rec.ID,
+						"original_stream": rec.StreamName,
+						"event_type":      rec.EventType,
+						"event_key":       rec.EventKey,
+						"payload":         string(rec.Payload),
+						"error":           pubErr.Error(),
+						"dead_lettered_at": time.Now().UTC().Format(time.RFC3339),
+					}
+					_, _ = r.publisher.PublishStream(ctx, r.config.DLQStream, dlqPayload)
+				}
+				if r.config.OnDeadLetter != nil {
+					r.config.OnDeadLetter(ctx, rec, pubErr)
+				}
+				deadLetterErr := fmt.Sprintf("DEAD_LETTER: %v", pubErr)
+				if _, execErr := tx.Exec(ctx, updateRetrySQL, rec.ID, deadLetterErr); execErr != nil {
+					r.logError(ctx, "Failed to update outbox event dead-letter status", execErr, api.Int64("event_id", rec.ID))
+				}
+			} else {
+				// Increment retry count inside the transaction
+				if _, execErr := tx.Exec(ctx, updateRetrySQL, rec.ID, pubErr.Error()); execErr != nil {
+					r.logError(ctx, "Failed to update outbox event retry count", execErr, api.Int64("event_id", rec.ID))
+				}
 			}
 			continue
 		}

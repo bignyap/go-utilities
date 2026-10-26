@@ -20,6 +20,10 @@ func (n *noopPubSub) PublishStreamMap(ctx context.Context, stream string, values
 	return "0-0", nil
 }
 
+func (n *noopPubSub) ConsumeStream(ctx context.Context, stream, group, consumer string, handler StreamMessageHandler, opts ...ConsumerOption) error {
+	return nil
+}
+
 func (n *noopPubSub) Close() error {
 	return nil
 }

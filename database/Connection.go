@@ -155,6 +155,15 @@ func (c *Connection) Connect() error {
 		}
 
 		cfg.MaxConns = int32(c.PoolConfig.MaxOpenConns)
+		if c.PoolConfig.MaxIdleConns > 0 {
+			cfg.MinConns = int32(c.PoolConfig.MaxIdleConns)
+		}
+		if c.PoolConfig.ConnMaxIdleTime > 0 {
+			cfg.MaxConnIdleTime = c.PoolConfig.ConnMaxIdleTime
+		}
+		if c.PoolConfig.ConnMaxLifetime > 0 {
+			cfg.MaxConnLifetime = c.PoolConfig.ConnMaxLifetime
+		}
 
 		// Enable automatic tenant context scoping on acquired connections if explicitly enabled
 		if c.PoolConfig.EnableTenantScoped {
