@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bignyap/go-utilities/logger/api"
@@ -169,7 +170,7 @@ func (r *Relay) Start(ctx context.Context) error {
 
 		err := r.listenAndDrain(ctx)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "closed pool") {
 				return err
 			}
 			r.logWarn(ctx, "Outbox notification listener encountered error, reconnecting in 1s", api.String("error", err.Error()))
@@ -206,6 +207,9 @@ func (r *Relay) listenAndDrain(ctx context.Context) error {
 		for {
 			count, drainErr := r.drainBatch(ctx)
 			if drainErr != nil {
+				if errors.Is(drainErr, context.Canceled) || strings.Contains(drainErr.Error(), "closed pool") {
+					return drainErr
+				}
 				r.logError(ctx, "Error draining outbox batch", drainErr)
 				break
 			}
