@@ -101,6 +101,49 @@ func TestRedisStreamPublisherValidation(t *testing.T) {
 	}
 }
 
+func TestSanitizeStreamValues(t *testing.T) {
+	input := map[string]interface{}{
+		"str":       "hello",
+		"int":       42,
+		"bool":      true,
+		"bytes":     []byte("binary"),
+		"nil_field": nil,
+		"nested_map": map[string]interface{}{
+			"sub_key": "sub_val",
+			"count":   10,
+		},
+		"slice": []interface{}{"item1", 123},
+	}
+
+	sanitized := sanitizeStreamValues(input)
+
+	if sanitized["str"] != "hello" {
+		t.Errorf("expected 'hello', got %v", sanitized["str"])
+	}
+	if sanitized["int"] != 42 {
+		t.Errorf("expected 42, got %v", sanitized["int"])
+	}
+	if _, exists := sanitized["nil_field"]; exists {
+		t.Errorf("expected nil_field to be omitted")
+	}
+	// Verify nested map was converted to JSON string
+	nestedStr, ok := sanitized["nested_map"].(string)
+	if !ok {
+		t.Fatalf("expected nested_map to be serialized as string, got %T", sanitized["nested_map"])
+	}
+	if nestedStr != `{"count":10,"sub_key":"sub_val"}` {
+		t.Errorf("unexpected nested_map JSON: %s", nestedStr)
+	}
+	// Verify slice was converted to JSON string
+	sliceStr, ok := sanitized["slice"].(string)
+	if !ok {
+		t.Fatalf("expected slice to be serialized as string, got %T", sanitized["slice"])
+	}
+	if sliceStr != `["item1",123]` {
+		t.Errorf("unexpected slice JSON: %s", sliceStr)
+	}
+}
+
 func TestNoopPubSubImplementsBoth(t *testing.T) {
 	// Verify noopPubSub implements PubSubClient and StreamPublisher
 	var client PubSubClient = &noopPubSub{}

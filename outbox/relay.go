@@ -300,6 +300,12 @@ func (r *Relay) drainBatch(ctx context.Context) (int, error) {
 		var streamPayload any = rec.Payload
 		var mapPayload map[string]interface{}
 		if err := json.Unmarshal(rec.Payload, &mapPayload); err == nil && len(mapPayload) > 0 {
+			if _, exists := mapPayload["payload"]; !exists {
+				mapPayload["payload"] = string(rec.Payload)
+			}
+			if _, exists := mapPayload["event_type"]; !exists && rec.EventType != "" {
+				mapPayload["event_type"] = rec.EventType
+			}
 			streamPayload = mapPayload
 		}
 

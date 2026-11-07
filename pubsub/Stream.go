@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,6 +136,30 @@ func (p *redisStreamPublisher) PublishStream(ctx context.Context, stream string,
 	}
 }
 
+// sanitizeStreamValues ensures all values in the map are Redis-compatible scalar types.
+// Redis Streams (XADD) reject complex types like nested maps and slices with:
+// "redis: can't marshal map[string]interface {} (implement encoding.BinaryMarshaler)".
+// Any nested maps, slices, or structs are automatically JSON-encoded into strings.
+func sanitizeStreamValues(values map[string]interface{}) map[string]interface{} {
+	sanitized := make(map[string]interface{}, len(values))
+	for k, v := range values {
+		if v == nil {
+			continue
+		}
+		switch val := v.(type) {
+		case string, []byte, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, bool, time.Time, time.Duration, encoding.BinaryMarshaler:
+			sanitized[k] = val
+		default:
+			if b, err := json.Marshal(val); err == nil {
+				sanitized[k] = string(b)
+			} else {
+				sanitized[k] = fmt.Sprintf("%v", val)
+			}
+		}
+	}
+	return sanitized
+}
+
 func (p *redisStreamPublisher) PublishStreamMap(ctx context.Context, stream string, values map[string]interface{}, opts ...StreamOption) (string, error) {
 	if len(values) == 0 {
 		return "", errors.New("stream values cannot be empty")
@@ -146,14 +171,16 @@ func (p *redisStreamPublisher) PublishStreamMap(ctx context.Context, stream stri
 
 	options := applyStreamOptions(opts)
 
-	if options.Key != "" && values["key"] == nil {
-		values["key"] = options.Key
+	sanitizedValues := sanitizeStreamValues(values)
+
+	if options.Key != "" && sanitizedValues["key"] == nil {
+		sanitizedValues["key"] = options.Key
 	}
 
 	args := &redis.XAddArgs{
 		Stream: p.prefixed(stream),
 		ID:     options.ID,
-		Values: values,
+		Values: sanitizedValues,
 	}
 
 	if options.MaxLen > 0 {
