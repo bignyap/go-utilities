@@ -202,8 +202,11 @@ func TestParseAndVerifyJWT_InvalidIssuerHost(t *testing.T) {
 	signed, _ := tok.SignedString(priv)
 
 	_, err := ParseAndVerifyJWT(signed)
-	if err == nil || !strings.Contains(err.Error(), "token not issued by") {
+	if err == nil || !strings.Contains(err.Error(), "token issuer is not authorized") {
 		t.Fatalf("expected issuer host error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "http://example.com") {
+		t.Fatalf("error leaks configured AUTH_URL: %v", err)
 	}
 }
 
@@ -339,17 +342,17 @@ func TestIsIssuerAllowed(t *testing.T) {
 			want:         true,
 		},
 		{
-			name:         "Hostname match without port in ALLOWED_HOSTS",
+			name:         "Hostname match without port in ALLOWED_HOSTS rejected to prevent SSRF",
 			issuer:       "http://192.168.1.4:8180/auth/realms/kgb",
 			authURL:      "http://localhost:8180/auth/realms/kgb",
 			allowedHosts: "192.168.1.4",
-			want:         true,
+			want:         false,
 		},
 		{
-			name:    "Hostname match without port in AUTH_URL",
+			name:    "Hostname match without port in AUTH_URL rejected to prevent SSRF",
 			issuer:  "http://192.168.1.4:8180/auth/realms/kgb",
 			authURL: "http://192.168.1.4/auth/realms/kgb",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "Loopback equivalence localhost vs 127.0.0.1",
@@ -362,6 +365,18 @@ func TestIsIssuerAllowed(t *testing.T) {
 			issuer:  "http://host.docker.internal:8180/auth/realms/kgb",
 			authURL: "http://localhost:8180/auth/realms/kgb",
 			want:    true,
+		},
+		{
+			name:    "SSRF prevention: loopback port mismatch rejected (Redis port probe)",
+			issuer:  "http://localhost:6379/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb",
+			want:    false,
+		},
+		{
+			name:    "SSRF prevention: 127.0.0.1 port mismatch rejected (Docker daemon probe)",
+			issuer:  "http://127.0.0.1:2375/auth/realms/kgb",
+			authURL: "http://localhost:8180/auth/realms/kgb",
+			want:    false,
 		},
 		{
 			name:    "Disallowed external host",
@@ -551,5 +566,103 @@ func TestParseAndVerifyJWT_LoopbackIssuerWithInternalAuthURL(t *testing.T) {
 	}
 	if got["iss"] != browserIssuer {
 		t.Fatalf("expected iss %q, got: %v", browserIssuer, got["iss"])
+	}
+}
+
+func TestNormalizeIssuer(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"http://localhost:8180/auth/realms/kgb?query=1", "http://localhost:8180/auth/realms/kgb"},
+		{"http://localhost:8180/auth/realms/kgb/", "http://localhost:8180/auth/realms/kgb"},
+		{"http://localhost:8180/auth/realms/kgb#section", "http://localhost:8180/auth/realms/kgb"},
+		{"HTTP://LOCALHOST:8180/auth/realms/kgb", "http://localhost:8180/auth/realms/kgb"},
+		{"http://localhost:8180/auth/realms/kgb?a=1&b=2#frag", "http://localhost:8180/auth/realms/kgb"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeIssuer(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeIssuer(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestCacheKeyNormalizationPreventsFlooding(t *testing.T) {
+	if certCache != nil {
+		certCache.Flush()
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	pubJWK, err := jwk.New(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to build JWK: %v", err)
+	}
+	_ = pubJWK.Set(jwk.KeyIDKey, "kid1")
+	set := jwk.NewSet()
+	set.Add(pubJWK)
+	jwksJSON, _ := json.Marshal(set)
+
+	fetchCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetchCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksJSON)
+	}))
+	defer srv.Close()
+
+	t.Setenv("AUTH_URL", srv.URL)
+
+	baseIssuer := srv.URL + "/realms/dev"
+
+	// First fetch with query param 1
+	issuer1 := baseIssuer + "?param=1"
+	claims1 := jwtlib.MapClaims{"iss": issuer1, "exp": time.Now().Add(time.Hour).Unix()}
+	tok1 := jwtlib.NewWithClaims(jwtlib.SigningMethodRS256, claims1)
+	tok1.Header["kid"] = "kid1"
+	signed1, _ := tok1.SignedString(priv)
+
+	if _, err := ParseAndVerifyJWT(signed1); err != nil {
+		t.Fatalf("unexpected error on first token: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected 1 fetch, got %d", fetchCount)
+	}
+
+	// Second fetch with query param 2 - should hit cache because normalized issuer is identical
+	issuer2 := baseIssuer + "?param=2"
+	claims2 := jwtlib.MapClaims{"iss": issuer2, "exp": time.Now().Add(time.Hour).Unix()}
+	tok2 := jwtlib.NewWithClaims(jwtlib.SigningMethodRS256, claims2)
+	tok2.Header["kid"] = "kid1"
+	signed2, _ := tok2.SignedString(priv)
+
+	if _, err := ParseAndVerifyJWT(signed2); err != nil {
+		t.Fatalf("unexpected error on second token: %v", err)
+	}
+	if fetchCount != 1 {
+		t.Fatalf("expected cached fetch (count still 1), got %d (cache flooding not prevented)", fetchCount)
+	}
+}
+
+func TestReloadConfig(t *testing.T) {
+	t.Setenv("AUTH_URL", "http://initial.com/realms/dev")
+	ReloadConfig()
+
+	cfg := getConfig()
+	if cfg.authURL != "http://initial.com/realms/dev" {
+		t.Fatalf("expected initial config, got %q", cfg.authURL)
+	}
+
+	t.Setenv("AUTH_URL", "http://updated.com/realms/dev")
+	ReloadConfig()
+
+	cfg2 := getConfig()
+	if cfg2.authURL != "http://updated.com/realms/dev" {
+		t.Fatalf("expected updated config, got %q", cfg2.authURL)
 	}
 }

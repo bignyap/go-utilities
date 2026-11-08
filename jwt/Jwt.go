@@ -10,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bignyap/go-utilities/httpclient"
@@ -20,79 +22,301 @@ import (
 
 var certCache *cache.Cache
 
+// ============================================================================
+// Configuration & Startup Parsing
+// ============================================================================
+
+type allowedTarget struct {
+	raw      string
+	hostname string // lowercase
+	port     string // explicit port, or default port for scheme if URL ("80" / "443"), or "" if host-only
+}
+
+func (t allowedTarget) matches(issuerHostname, issuerPort string) bool {
+	// Loopback equivalence (localhost == 127.0.0.1 == ::1 == host.docker.internal)
+	// Requires matching port to prevent SSRF against arbitrary local services.
+	if isLoopback(issuerHostname) && isLoopback(t.hostname) {
+		return issuerPort == t.port
+	}
+
+	// Exact hostname match
+	if strings.EqualFold(issuerHostname, t.hostname) {
+		if t.port != "" {
+			return issuerPort == t.port
+		}
+		// If target has no port, allow standard HTTP/HTTPS ports only
+		return issuerPort == "80" || issuerPort == "443"
+	}
+
+	return false
+}
+
+func parseAllowedTarget(entry string) (allowedTarget, bool) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return allowedTarget{}, false
+	}
+
+	// If entry has a scheme (http:// or https://), parse as URL
+	if strings.HasPrefix(entry, "http://") || strings.HasPrefix(entry, "https://") {
+		u, err := url.Parse(entry)
+		if err != nil || u.Host == "" {
+			return allowedTarget{}, false
+		}
+		port := u.Port()
+		if port == "" {
+			if strings.EqualFold(u.Scheme, "https") {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		return allowedTarget{
+			raw:      entry,
+			hostname: strings.ToLower(u.Hostname()),
+			port:     port,
+		}, true
+	}
+
+	// If entry contains a port (host:port)
+	if strings.Contains(entry, ":") {
+		h, p, err := net.SplitHostPort(entry)
+		if err == nil && h != "" && p != "" {
+			return allowedTarget{
+				raw:      entry,
+				hostname: strings.ToLower(h),
+				port:     p,
+			}, true
+		}
+	}
+
+	// Hostname only (no port)
+	return allowedTarget{
+		raw:      entry,
+		hostname: strings.ToLower(entry),
+		port:     "",
+	}, true
+}
+
+type authConfig struct {
+	authURL         string
+	allowedHosts    string
+	jwksURL         string
+	rawSkipTLS      string
+	skipTLSVerify   bool
+	keycloakBaseURL string
+	audience        string
+
+	allowedTargets         []allowedTarget
+	internalAuthCandidates []string
+	internalKeycloakBase   string
+}
+
+var (
+	currentConfig atomic.Pointer[authConfig]
+	configMu      sync.Mutex
+
+	sharedHTTPClientMu sync.RWMutex
+	sharedHTTPClient   *http.Client
+	lastSkipTLS        bool
+)
+
 func init() {
 	// Initialize the cache with a default expiration time of 1 hour, and cleanup interval of 30 minutes
 	certCache = cache.New(1*time.Hour, 30*time.Minute)
+	ReloadConfig()
 }
 
-// findInternalAuthURL searches AUTH_URL and KEYCLOAK_BASE_URL for an internal (non-loopback)
-// Keycloak endpoint reachable inside Docker or cluster networks.
-func findInternalAuthURL(issuerPath string) string {
-	realm, _ := extractRealmFromPath(issuerPath)
+// ReloadConfig forces a reload of the JWT authentication configuration from environment variables.
+func ReloadConfig() {
+	configMu.Lock()
+	defer configMu.Unlock()
 
-	// 1. Check AUTH_URL for an internal (non-loopback) URL
-	if authURL := os.Getenv("AUTH_URL"); authURL != "" {
-		var nonLoopbackCandidates []string
-		var realmMatchCandidate string
+	authURL := os.Getenv("AUTH_URL")
+	allowedHosts := os.Getenv("AUTH_ALLOWED_HOSTS")
+	jwksURL := os.Getenv("AUTH_JWKS_URL")
+	skipTLS := os.Getenv("AUTH_SKIP_TLS_VERIFY")
+	kcURL := os.Getenv("KEYCLOAK_BASE_URL")
+	if kcURL == "" {
+		kcURL = os.Getenv("KEYCLOAK_URL")
+	}
+	aud := os.Getenv("AUTH_AUDIENCE")
 
-		for _, entry := range strings.Split(authURL, ",") {
-			trimmed := strings.TrimSpace(entry)
-			if trimmed == "" {
-				continue
+	reloadConfigLocked(authURL, allowedHosts, jwksURL, skipTLS, kcURL, aud)
+}
+
+func reloadConfigLocked(authURL, allowedHosts, jwksURL, skipTLS, kcURL, aud string) *authConfig {
+	skipTLSBool := false
+	if skipTLS != "" {
+		if b, err := strconv.ParseBool(skipTLS); err == nil {
+			skipTLSBool = b
+		}
+	}
+
+	var targets []allowedTarget
+	var internalAuthCandidates []string
+
+	if authURL != "" {
+		for _, u := range strings.Split(authURL, ",") {
+			if target, ok := parseAllowedTarget(u); ok {
+				targets = append(targets, target)
 			}
-			if u, parseErr := url.Parse(trimmed); parseErr == nil {
-				if !isLoopback(u.Hostname()) {
-					nonLoopbackCandidates = append(nonLoopbackCandidates, trimmed)
-					if realm != "" && strings.Contains(u.Path, "/realms/"+realm) {
-						realmMatchCandidate = trimmed
-						break
+			trimmed := strings.TrimSpace(u)
+			if trimmed != "" {
+				if parsed, err := url.Parse(trimmed); err == nil && parsed.Host != "" {
+					if !isLoopback(parsed.Hostname()) {
+						internalAuthCandidates = append(internalAuthCandidates, trimmed)
 					}
 				}
 			}
 		}
+	}
 
-		if realmMatchCandidate != "" {
-			return realmMatchCandidate
-		} else if len(nonLoopbackCandidates) > 0 {
-			return nonLoopbackCandidates[0]
+	if allowedHosts != "" {
+		for _, h := range strings.Split(allowedHosts, ",") {
+			if target, ok := parseAllowedTarget(h); ok {
+				targets = append(targets, target)
+			}
 		}
 	}
 
-	// 2. Fall back to KEYCLOAK_BASE_URL or KEYCLOAK_URL
-	if realm != "" {
-		kcURL := os.Getenv("KEYCLOAK_BASE_URL")
-		if kcURL == "" {
-			kcURL = os.Getenv("KEYCLOAK_URL")
+	var internalKeycloakBase string
+	if kcURL != "" {
+		if parsed, err := url.Parse(kcURL); err == nil && !isLoopback(parsed.Hostname()) {
+			internalKeycloakBase = kcURL
 		}
-		if kcURL != "" {
-			if u, parseErr := url.Parse(kcURL); parseErr == nil && !isLoopback(u.Hostname()) {
-				if joined, joinErr := url.JoinPath(kcURL, "realms", realm); joinErr == nil {
-					return joined
-				}
-			}
+	}
+
+	cfg := &authConfig{
+		authURL:                authURL,
+		allowedHosts:           allowedHosts,
+		jwksURL:                jwksURL,
+		rawSkipTLS:             skipTLS,
+		skipTLSVerify:          skipTLSBool,
+		keycloakBaseURL:        kcURL,
+		audience:               aud,
+		allowedTargets:         targets,
+		internalAuthCandidates: internalAuthCandidates,
+		internalKeycloakBase:   internalKeycloakBase,
+	}
+
+	currentConfig.Store(cfg)
+	return cfg
+}
+
+func getConfig() *authConfig {
+	cfg := currentConfig.Load()
+
+	// In test environments where t.Setenv is used without calling ReloadConfig,
+	// detect changes dynamically and reload. In production, this fast-paths with string comparison.
+	authURL := os.Getenv("AUTH_URL")
+	allowedHosts := os.Getenv("AUTH_ALLOWED_HOSTS")
+	jwksURL := os.Getenv("AUTH_JWKS_URL")
+	skipTLS := os.Getenv("AUTH_SKIP_TLS_VERIFY")
+	kcURL := os.Getenv("KEYCLOAK_BASE_URL")
+	if kcURL == "" {
+		kcURL = os.Getenv("KEYCLOAK_URL")
+	}
+	aud := os.Getenv("AUTH_AUDIENCE")
+
+	if cfg != nil &&
+		cfg.authURL == authURL &&
+		cfg.allowedHosts == allowedHosts &&
+		cfg.jwksURL == jwksURL &&
+		cfg.rawSkipTLS == skipTLS &&
+		cfg.keycloakBaseURL == kcURL &&
+		cfg.audience == aud {
+		return cfg
+	}
+
+	configMu.Lock()
+	defer configMu.Unlock()
+	return reloadConfigLocked(authURL, allowedHosts, jwksURL, skipTLS, kcURL, aud)
+}
+
+// ============================================================================
+// Shared HTTP Client
+// ============================================================================
+
+func getJWKSHTTPClient(skipTLS bool) *http.Client {
+	sharedHTTPClientMu.RLock()
+	client := sharedHTTPClient
+	currentSkip := lastSkipTLS
+	sharedHTTPClientMu.RUnlock()
+
+	if client != nil && currentSkip == skipTLS {
+		return client
+	}
+
+	sharedHTTPClientMu.Lock()
+	defer sharedHTTPClientMu.Unlock()
+
+	if sharedHTTPClient != nil && lastSkipTLS == skipTLS {
+		return sharedHTTPClient
+	}
+
+	config := httpclient.DefaultConfig()
+	config.RetryCount = 1
+	config.Timeout = 10 * time.Second
+	config.CircuitBreakerCommand = "jwks-client"
+	config.TLSClientConfig.SkipTLSVerify = skipTLS
+
+	sharedHTTPClient = httpclient.NewHTTPClient("", config, func(err error) error {
+		return fmt.Errorf("service temporarily unavailable")
+	})
+	lastSkipTLS = skipTLS
+	return sharedHTTPClient
+}
+
+// normalizeIssuer strips query params, fragments, userinfo, and trailing slashes to prevent cache key flooding.
+func normalizeIssuer(rawIssuer string) string {
+	u, err := url.Parse(rawIssuer)
+	if err != nil {
+		return strings.TrimRight(strings.TrimSpace(rawIssuer), "/")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Host)
+	path := strings.TrimRight(u.Path, "/")
+	if scheme == "" || host == "" {
+		return strings.TrimRight(strings.TrimSpace(rawIssuer), "/")
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, path)
+}
+
+// findInternalAuthURL searches pre-configured AUTH_URL and KEYCLOAK_BASE_URL for an internal (non-loopback)
+// Keycloak endpoint reachable inside Docker or cluster networks.
+func findInternalAuthURL(issuerPath string) string {
+	realm, _ := extractRealmFromPath(issuerPath)
+	cfg := getConfig()
+
+	// 1. Check internal candidates from AUTH_URL
+	var realmMatchCandidate string
+	for _, candidate := range cfg.internalAuthCandidates {
+		if realm != "" && strings.Contains(candidate, "/realms/"+realm) {
+			realmMatchCandidate = candidate
+			break
+		}
+	}
+	if realmMatchCandidate != "" {
+		return realmMatchCandidate
+	} else if len(cfg.internalAuthCandidates) > 0 {
+		return cfg.internalAuthCandidates[0]
+	}
+
+	// 2. Fall back to KEYCLOAK_BASE_URL or KEYCLOAK_URL
+	if realm != "" && cfg.internalKeycloakBase != "" {
+		if joined, err := url.JoinPath(cfg.internalKeycloakBase, "realms", realm); err == nil {
+			return joined
 		}
 	}
 
 	return ""
 }
 
-// fetchJWKS performs HTTP request to retrieve and parse the JWKS from certEndpoint.
-func fetchJWKS(baseURL, certEndpoint string) (jwk.Set, error) {
-	config := httpclient.DefaultConfig()
-	config.RetryCount = 1
-	config.Timeout = 10 * time.Second
-
-	skipTLS := false
-	if v := os.Getenv("AUTH_SKIP_TLS_VERIFY"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			skipTLS = b
-		}
-	}
-	config.TLSClientConfig.SkipTLSVerify = skipTLS
-
-	hc := httpclient.NewHTTPClient(baseURL, config, func(err error) error {
-		return fmt.Errorf("service temporarily unavailable")
-	})
+// fetchJWKS performs HTTP request to retrieve and parse the JWKS from certEndpoint using the shared HTTP client.
+func fetchJWKS(certEndpoint string) (jwk.Set, error) {
+	cfg := getConfig()
+	hc := getJWKSHTTPClient(cfg.skipTLSVerify)
 
 	req, err := http.NewRequest(http.MethodGet, certEndpoint, nil)
 	if err != nil {
@@ -125,27 +349,30 @@ func fetchJWKS(baseURL, certEndpoint string) (jwk.Set, error) {
 }
 
 func getJWKSet(issuer string) (jwk.Set, error) {
-	if jwks, found := certCache.Get(issuer); found {
+	cacheKey := normalizeIssuer(issuer)
+	if jwks, found := certCache.Get(cacheKey); found {
 		return jwks.(jwk.Set), nil
 	}
 
+	cfg := getConfig()
+
 	// 1. Explicit override via AUTH_JWKS_URL
-	if customJWKS := os.Getenv("AUTH_JWKS_URL"); customJWKS != "" {
-		jwks, err := fetchJWKS(customJWKS, customJWKS)
+	if cfg.jwksURL != "" {
+		jwks, err := fetchJWKS(cfg.jwksURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get JWK set from AUTH_JWKS_URL: %w", err)
 		}
-		certCache.Set(issuer, jwks, cache.DefaultExpiration)
+		certCache.Set(cacheKey, jwks, cache.DefaultExpiration)
 		return jwks, nil
 	}
 
 	// 2. Try fetching directly from the token's issuer URL first.
 	// When running locally on host (e.g. make run-debug), localhost:8180 works directly.
 	var lastErr error
-	certEndpoint, err := url.JoinPath(issuer, "protocol/openid-connect/certs")
+	certEndpoint, err := url.JoinPath(cacheKey, "protocol/openid-connect/certs")
 	if err == nil {
-		if jwks, fetchErr := fetchJWKS(issuer, certEndpoint); fetchErr == nil {
-			certCache.Set(issuer, jwks, cache.DefaultExpiration)
+		if jwks, fetchErr := fetchJWKS(certEndpoint); fetchErr == nil {
+			certCache.Set(cacheKey, jwks, cache.DefaultExpiration)
 			return jwks, nil
 		} else {
 			lastErr = fetchErr
@@ -156,11 +383,11 @@ func getJWKSet(issuer string) (jwk.Set, error) {
 
 	// 3. Fallback: If direct fetch from issuer failed (e.g. localhost:8180 inside Docker container),
 	// and issuer is a loopback address, fall back to internal endpoint from AUTH_URL or KEYCLOAK_BASE_URL.
-	if parsed, parseErr := url.Parse(issuer); parseErr == nil && isLoopback(parsed.Hostname()) {
+	if parsed, parseErr := url.Parse(cacheKey); parseErr == nil && isLoopback(parsed.Hostname()) {
 		if internalBase := findInternalAuthURL(parsed.Path); internalBase != "" {
 			if internalEndpoint, joinErr := url.JoinPath(internalBase, "protocol/openid-connect/certs"); joinErr == nil {
-				if jwks, internalErr := fetchJWKS(internalBase, internalEndpoint); internalErr == nil {
-					certCache.Set(issuer, jwks, cache.DefaultExpiration)
+				if jwks, internalErr := fetchJWKS(internalEndpoint); internalErr == nil {
+					certCache.Set(cacheKey, jwks, cache.DefaultExpiration)
 					return jwks, nil
 				} else {
 					lastErr = internalErr
@@ -173,7 +400,6 @@ func getJWKSet(issuer string) (jwk.Set, error) {
 }
 
 func extractRealmFromPath(path string) (string, error) {
-
 	segments := strings.Split(path, "/")
 	if len(segments) < 3 {
 		return "", fmt.Errorf("issuer URL path does not contain enough segments to extract realm")
@@ -201,61 +427,26 @@ func isLoopback(host string) bool {
 // isIssuerAllowed checks if the token's issuer matches any allowed configuration
 func isIssuerAllowed(tokenIssuer string) bool {
 	parsedIssuer, err := url.Parse(tokenIssuer)
-	if err != nil {
+	if err != nil || parsedIssuer.Host == "" {
 		return false
 	}
-	issuerHost := parsedIssuer.Host
-	issuerHostname := parsedIssuer.Hostname()
-
-	// Gather all allowed targets from AUTH_URL and AUTH_ALLOWED_HOSTS
-	var allowedEntries []string
-	if authURL := os.Getenv("AUTH_URL"); authURL != "" {
-		for _, u := range strings.Split(authURL, ",") {
-			if trimmed := strings.TrimSpace(u); trimmed != "" {
-				allowedEntries = append(allowedEntries, trimmed)
-			}
-		}
-	}
-	if allowedHosts := os.Getenv("AUTH_ALLOWED_HOSTS"); allowedHosts != "" {
-		for _, h := range strings.Split(allowedHosts, ",") {
-			if trimmed := strings.TrimSpace(h); trimmed != "" {
-				allowedEntries = append(allowedEntries, trimmed)
-			}
+	issuerHostname := strings.ToLower(parsedIssuer.Hostname())
+	issuerPort := parsedIssuer.Port()
+	if issuerPort == "" {
+		if strings.EqualFold(parsedIssuer.Scheme, "https") {
+			issuerPort = "443"
+		} else if strings.EqualFold(parsedIssuer.Scheme, "http") {
+			issuerPort = "80"
 		}
 	}
 
-	if len(allowedEntries) == 0 {
+	cfg := getConfig()
+	if len(cfg.allowedTargets) == 0 {
 		return false
 	}
 
-	for _, entry := range allowedEntries {
-		targetHost := entry
-		targetHostname := entry
-
-		// If entry is a full URL, parse its host & hostname
-		if strings.HasPrefix(entry, "http://") || strings.HasPrefix(entry, "https://") {
-			if u, err := url.Parse(entry); err == nil {
-				targetHost = u.Host
-				targetHostname = u.Hostname()
-			}
-		} else if strings.Contains(entry, ":") {
-			if h, _, err := net.SplitHostPort(entry); err == nil {
-				targetHostname = h
-			}
-		}
-
-		// Exact host match (including port)
-		if strings.EqualFold(issuerHost, targetHost) {
-			return true
-		}
-
-		// Hostname-only match (ignores differing port numbers)
-		if strings.EqualFold(issuerHostname, targetHostname) {
-			return true
-		}
-
-		// Loopback equivalence (localhost == 127.0.0.1 == host.docker.internal)
-		if isLoopback(issuerHostname) && isLoopback(targetHostname) {
+	for _, target := range cfg.allowedTargets {
+		if target.matches(issuerHostname, issuerPort) {
 			return true
 		}
 	}
@@ -264,7 +455,6 @@ func isIssuerAllowed(tokenIssuer string) bool {
 }
 
 func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
-
 	// Step 1: Parse the JWT token without verifying the signature
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
 	if err != nil {
@@ -288,7 +478,7 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	}
 
 	if !isIssuerAllowed(issuer) {
-		return jwt.MapClaims{}, fmt.Errorf("token not issued by %s", os.Getenv("AUTH_URL"))
+		return jwt.MapClaims{}, fmt.Errorf("token issuer is not authorized")
 	}
 
 	realm, err := extractRealmFromPath(parsedUrl.Path)
@@ -298,6 +488,7 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	claims["realm"] = realm
 
 	// Validate audience format if present or if AUTH_AUDIENCE is specified
+	cfg := getConfig()
 	if audVal, exists := claims["aud"]; exists {
 		switch audVal.(type) {
 		case string, []interface{}, []string:
@@ -305,11 +496,11 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 		default:
 			return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
 		}
-	} else if os.Getenv("AUTH_AUDIENCE") != "" {
+	} else if cfg.audience != "" {
 		return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
 	}
 
-	// Step 4: Get or fetch the JWK set
+	// Step 3: Get or fetch the JWK set
 	jwks, err := getJWKSet(issuer)
 	if err != nil {
 		return jwt.MapClaims{}, fmt.Errorf("failed to get JWK set: %w", err)
@@ -326,7 +517,8 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	key, found := jwks.LookupKeyID(kid)
 	if !found {
 		// Attempt cache refresh in case key rotation occurred
-		certCache.Delete(issuer)
+		cacheKey := normalizeIssuer(issuer)
+		certCache.Delete(cacheKey)
 		if refreshedJWKS, refErr := getJWKSet(issuer); refErr == nil {
 			jwks = refreshedJWKS
 			key, found = jwks.LookupKeyID(kid)
@@ -348,8 +540,8 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 		jwt.WithIssuer(issuer),
 		jwt.WithLeeway(1 * time.Minute),
 	}
-	if aud := os.Getenv("AUTH_AUDIENCE"); aud != "" {
-		opts = append(opts, jwt.WithAudience(aud))
+	if cfg.audience != "" {
+		opts = append(opts, jwt.WithAudience(cfg.audience))
 	}
 
 	parsedToken, err := jwt.ParseWithClaims(
@@ -372,7 +564,6 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 }
 
 func ExtractToken(r *http.Request) (string, error) {
-
 	// Extract the token from header
 	authHeader := strings.Trim(r.Header.Get("Authorization"), ";")
 	if authHeader == "" {
