@@ -25,15 +25,88 @@ func init() {
 	certCache = cache.New(1*time.Hour, 30*time.Minute)
 }
 
+// resolveJWKSFetchURL determines the endpoint to fetch JWKS keys from.
+// In containerized or orchestrated environments, the token's 'iss' claim is often
+// a client-facing loopback URL (e.g. http://localhost:8180/auth/realms/kgb from a browser),
+// but the backend service must query Keycloak over the internal network (e.g. http://keycloak:8080/...).
+func resolveJWKSFetchURL(issuer string) (string, string, error) {
+	// If explicit JWKS endpoint is configured, use it directly
+	if customJWKS := os.Getenv("AUTH_JWKS_URL"); customJWKS != "" {
+		return customJWKS, customJWKS, nil
+	}
+
+	parsedIssuer, err := url.Parse(issuer)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse issuer URL: %w", err)
+	}
+
+	fetchBase := issuer
+
+	// If the token's issuer uses loopback, attempt to find an internal non-loopback endpoint
+	if isLoopback(parsedIssuer.Hostname()) {
+		realm, _ := extractRealmFromPath(parsedIssuer.Path)
+
+		// 1. Check AUTH_URL for an internal (non-loopback) URL
+		if authURL := os.Getenv("AUTH_URL"); authURL != "" {
+			var nonLoopbackCandidates []string
+			var realmMatchCandidate string
+
+			for _, entry := range strings.Split(authURL, ",") {
+				trimmed := strings.TrimSpace(entry)
+				if trimmed == "" {
+					continue
+				}
+				if u, parseErr := url.Parse(trimmed); parseErr == nil {
+					if !isLoopback(u.Hostname()) {
+						nonLoopbackCandidates = append(nonLoopbackCandidates, trimmed)
+						if realm != "" && strings.Contains(u.Path, "/realms/"+realm) {
+							realmMatchCandidate = trimmed
+							break
+						}
+					}
+				}
+			}
+
+			if realmMatchCandidate != "" {
+				fetchBase = realmMatchCandidate
+			} else if len(nonLoopbackCandidates) > 0 {
+				fetchBase = nonLoopbackCandidates[0]
+			}
+		}
+
+		// 2. Fall back to KEYCLOAK_BASE_URL or KEYCLOAK_URL if fetchBase is still loopback
+		if fetchBase == issuer && realm != "" {
+			kcURL := os.Getenv("KEYCLOAK_BASE_URL")
+			if kcURL == "" {
+				kcURL = os.Getenv("KEYCLOAK_URL")
+			}
+			if kcURL != "" {
+				if u, parseErr := url.Parse(kcURL); parseErr == nil && !isLoopback(u.Hostname()) {
+					if joined, joinErr := url.JoinPath(kcURL, "realms", realm); joinErr == nil {
+						fetchBase = joined
+					}
+				}
+			}
+		}
+	}
+
+	certEndpoint, err := url.JoinPath(fetchBase, "protocol/openid-connect/certs")
+	if err != nil {
+		return "", "", fmt.Errorf("error building JWKS endpoint: %w", err)
+	}
+
+	return fetchBase, certEndpoint, nil
+}
+
 func getJWKSet(issuer string) (jwk.Set, error) {
 	if jwks, found := certCache.Get(issuer); found {
 		return jwks.(jwk.Set), nil
 	}
 
-	// Build the JWKS endpoint URL
-	certEndpoint, err := url.JoinPath(issuer, "protocol/openid-connect/certs")
+	// Resolve the actual base URL and cert endpoint to fetch keys from
+	fetchBase, certEndpoint, err := resolveJWKSFetchURL(issuer)
 	if err != nil {
-		return nil, fmt.Errorf("error getting the public certificate: %v", err)
+		return nil, fmt.Errorf("error resolving JWKS endpoint: %v", err)
 	}
 
 	// Configure resilient HTTP client
@@ -49,7 +122,7 @@ func getJWKSet(issuer string) (jwk.Set, error) {
 	}
 	config.TLSClientConfig.SkipTLSVerify = skipTLS
 
-	hc := httpclient.NewHTTPClient(issuer, config, func(err error) error {
+	hc := httpclient.NewHTTPClient(fetchBase, config, func(err error) error {
 		return fmt.Errorf("service temporarily unavailable")
 	})
 

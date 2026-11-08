@@ -443,3 +443,140 @@ func TestParseAndVerifyJWT_ArrayAudience(t *testing.T) {
 		t.Fatalf("expected realm dev, got: %v", got["realm"])
 	}
 }
+
+func TestResolveJWKSFetchURL(t *testing.T) {
+	tests := []struct {
+		name            string
+		issuer          string
+		authURL         string
+		keycloakBaseURL string
+		customJWKS      string
+		wantBase        string
+		wantEndpoint    string
+	}{
+		{
+			name:         "Explicit AUTH_JWKS_URL override",
+			issuer:       "http://localhost:8180/auth/realms/kgb",
+			customJWKS:   "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+			wantBase:     "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+			wantEndpoint: "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+		},
+		{
+			name:         "Loopback issuer with internal AUTH_URL matching realm",
+			issuer:       "http://localhost:8180/auth/realms/kgb",
+			authURL:      "http://keycloak:8080/auth/realms/kgb,http://localhost:8180/auth/realms/kgb",
+			wantBase:     "http://keycloak:8080/auth/realms/kgb",
+			wantEndpoint: "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+		},
+		{
+			name:         "Loopback issuer with multiple internal candidates selecting matching realm",
+			issuer:       "http://localhost:8180/auth/realms/special",
+			authURL:      "http://keycloak:8080/auth/realms/other,http://keycloak:8080/auth/realms/special",
+			wantBase:     "http://keycloak:8080/auth/realms/special",
+			wantEndpoint: "http://keycloak:8080/auth/realms/special/protocol/openid-connect/certs",
+		},
+		{
+			name:            "Loopback issuer fallback to KEYCLOAK_BASE_URL",
+			issuer:          "http://localhost:8180/auth/realms/kgb",
+			authURL:         "http://localhost:8180/auth/realms/kgb",
+			keycloakBaseURL: "http://keycloak:8080/auth/",
+			wantBase:        "http://keycloak:8080/auth/realms/kgb",
+			wantEndpoint:    "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+		},
+		{
+			name:         "Non-loopback issuer preserved",
+			issuer:       "https://auth.example.com/realms/kgb",
+			authURL:      "http://keycloak:8080/auth/realms/kgb",
+			wantBase:     "https://auth.example.com/realms/kgb",
+			wantEndpoint: "https://auth.example.com/realms/kgb/protocol/openid-connect/certs",
+		},
+		{
+			name:         "Loopback issuer with loopback AUTH_URL remains loopback",
+			issuer:       "http://localhost:8180/auth/realms/kgb",
+			authURL:      "http://localhost:8180/auth/realms/kgb,http://127.0.0.1:8180/auth/realms/kgb",
+			wantBase:     "http://localhost:8180/auth/realms/kgb",
+			wantEndpoint: "http://localhost:8180/auth/realms/kgb/protocol/openid-connect/certs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AUTH_JWKS_URL", tt.customJWKS)
+			t.Setenv("AUTH_URL", tt.authURL)
+			t.Setenv("KEYCLOAK_BASE_URL", tt.keycloakBaseURL)
+
+			gotBase, gotEndpoint, err := resolveJWKSFetchURL(tt.issuer)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotBase != tt.wantBase {
+				t.Errorf("base mismatch: got %q, want %q", gotBase, tt.wantBase)
+			}
+			if gotEndpoint != tt.wantEndpoint {
+				t.Errorf("endpoint mismatch: got %q, want %q", gotEndpoint, tt.wantEndpoint)
+			}
+		})
+	}
+}
+
+func TestParseAndVerifyJWT_LoopbackIssuerWithInternalAuthURL(t *testing.T) {
+	if certCache != nil {
+		certCache.Flush()
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	pubJWK, err := jwk.New(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to build JWK: %v", err)
+	}
+	_ = pubJWK.Set(jwk.KeyIDKey, "kid1")
+	set := jwk.NewSet()
+	set.Add(pubJWK)
+	jwksJSON, _ := json.Marshal(set)
+
+	// Internal server that serves the JWKS
+	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/realms/kgb/protocol/openid-connect/certs" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksJSON)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer internalSrv.Close()
+
+	// Token issuer is a client-facing localhost URL (e.g. from browser)
+	browserIssuer := "http://localhost:8180/auth/realms/kgb"
+
+	// AUTH_URL contains both internal server URL and the browser localhost URL
+	t.Setenv("AUTH_URL", internalSrv.URL+"/auth/realms/kgb,"+browserIssuer)
+	// Point AUTH_JWKS_URL to internal server's certs endpoint
+	t.Setenv("AUTH_JWKS_URL", internalSrv.URL+"/auth/realms/kgb/protocol/openid-connect/certs")
+
+	claims := jwtlib.MapClaims{
+		"iss": browserIssuer,
+		"sub": "user-456",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	tok := jwtlib.NewWithClaims(jwtlib.SigningMethodRS256, claims)
+	tok.Header["kid"] = "kid1"
+	signed, err := tok.SignedString(priv)
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	got, err := ParseAndVerifyJWT(signed)
+	if err != nil {
+		t.Fatalf("expected token with localhost issuer and internal JWKS endpoint to verify, got: %v", err)
+	}
+	if got["realm"] != "kgb" {
+		t.Fatalf("expected realm kgb, got: %v", got["realm"])
+	}
+	if got["iss"] != browserIssuer {
+		t.Fatalf("expected iss %q, got: %v", browserIssuer, got["iss"])
+	}
+}
