@@ -24,9 +24,15 @@ var _ api.StorageService = (*MinIOStorageService)(nil)
 
 // NewMinIOStorageService creates a new MinIO storage service
 func NewMinIOStorageService(cfg config.MinIOConfig) (*MinIOStorageService, error) {
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
+		Region: region,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MinIO client: %w", err)
@@ -39,7 +45,9 @@ func NewMinIOStorageService(cfg config.MinIOConfig) (*MinIOStorageService, error
 		return nil, fmt.Errorf("failed to check bucket existence: %w", err)
 	}
 	if !exists {
-		err = client.MakeBucket(ctx, cfg.BucketName, minio.MakeBucketOptions{})
+		err = client.MakeBucket(ctx, cfg.BucketName, minio.MakeBucketOptions{
+			Region: region,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bucket: %w", err)
 		}
@@ -50,6 +58,7 @@ func NewMinIOStorageService(cfg config.MinIOConfig) (*MinIOStorageService, error
 		presignClient, err = minio.New(cfg.PublicEndpoint, &minio.Options{
 			Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 			Secure: cfg.PublicUseSSL,
+			Region: region,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create MinIO presign client: %w", err)

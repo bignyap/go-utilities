@@ -11,6 +11,7 @@ import (
 type MinIOConfig struct {
 	Endpoint       string
 	PublicEndpoint string
+	Region         string
 	AccessKey      string
 	SecretKey      string
 	BucketName     string
@@ -39,6 +40,7 @@ func LoadMinIOConfig() MinIOConfig {
 	return MinIOConfig{
 		Endpoint:       getEnvOrDefault("MINIO_ENDPOINT", "localhost:9000"),
 		PublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
+		Region:         getEnvOrDefault("MINIO_REGION", "us-east-1"),
 		AccessKey:      getEnvOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
 		SecretKey:      getEnvOrDefault("MINIO_SECRET_KEY", "minioadmin"),
 		BucketName:     getEnvOrDefault("MINIO_BUCKET", "kgb-messaging"),
