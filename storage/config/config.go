@@ -9,11 +9,13 @@ import (
 
 // MinIOConfig holds MinIO connection configuration
 type MinIOConfig struct {
-	Endpoint   string
-	AccessKey  string
-	SecretKey  string
-	BucketName string
-	UseSSL     bool
+	Endpoint       string
+	PublicEndpoint string
+	AccessKey      string
+	SecretKey      string
+	BucketName     string
+	UseSSL         bool
+	PublicUseSSL   bool
 }
 
 // S3Config holds AWS S3 connection configuration
@@ -27,12 +29,21 @@ type S3Config struct {
 
 // LoadMinIOConfig loads MinIO configuration from environment variables
 func LoadMinIOConfig() MinIOConfig {
+	useSSL := getEnvOrDefault("MINIO_USE_SSL", "false") == "true"
+	publicUseSSLStr := os.Getenv("MINIO_PUBLIC_USE_SSL")
+	publicUseSSL := useSSL
+	if publicUseSSLStr != "" {
+		publicUseSSL = publicUseSSLStr == "true"
+	}
+
 	return MinIOConfig{
-		Endpoint:   getEnvOrDefault("MINIO_ENDPOINT", "localhost:9000"),
-		AccessKey:  getEnvOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
-		SecretKey:  getEnvOrDefault("MINIO_SECRET_KEY", "minioadmin"),
-		BucketName: getEnvOrDefault("MINIO_BUCKET", "kgb-messaging"),
-		UseSSL:     getEnvOrDefault("MINIO_USE_SSL", "false") == "true",
+		Endpoint:       getEnvOrDefault("MINIO_ENDPOINT", "localhost:9000"),
+		PublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
+		AccessKey:      getEnvOrDefault("MINIO_ACCESS_KEY", "minioadmin"),
+		SecretKey:      getEnvOrDefault("MINIO_SECRET_KEY", "minioadmin"),
+		BucketName:     getEnvOrDefault("MINIO_BUCKET", "kgb-messaging"),
+		UseSSL:         useSSL,
+		PublicUseSSL:   publicUseSSL,
 	}
 }
 

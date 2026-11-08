@@ -14,8 +14,9 @@ import (
 
 // MinIOStorageService implements StorageService interface for MinIO
 type MinIOStorageService struct {
-	client     *minio.Client
-	bucketName string
+	client        *minio.Client
+	presignClient *minio.Client
+	bucketName    string
 }
 
 // Ensure MinIOStorageService implements api.StorageService
@@ -44,9 +45,21 @@ func NewMinIOStorageService(cfg config.MinIOConfig) (*MinIOStorageService, error
 		}
 	}
 
+	presignClient := client
+	if cfg.PublicEndpoint != "" && cfg.PublicEndpoint != cfg.Endpoint {
+		presignClient, err = minio.New(cfg.PublicEndpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+			Secure: cfg.PublicUseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create MinIO presign client: %w", err)
+		}
+	}
+
 	return &MinIOStorageService{
-		client:     client,
-		bucketName: cfg.BucketName,
+		client:        client,
+		presignClient: presignClient,
+		bucketName:    cfg.BucketName,
 	}, nil
 }
 
@@ -90,7 +103,7 @@ func (s *MinIOStorageService) Download(ctx context.Context, storagePath string) 
 // GetPresignedURL generates a presigned URL for downloading
 func (s *MinIOStorageService) GetPresignedURL(ctx context.Context, storagePath string, expirySeconds int) (string, error) {
 	expiry := time.Duration(expirySeconds) * time.Second
-	url, err := s.client.PresignedGetObject(ctx, s.bucketName, storagePath, expiry, nil)
+	url, err := s.presignClient.PresignedGetObject(ctx, s.bucketName, storagePath, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
@@ -100,7 +113,7 @@ func (s *MinIOStorageService) GetPresignedURL(ctx context.Context, storagePath s
 // GetPresignedUploadURL generates a presigned URL for direct uploading (PUT)
 func (s *MinIOStorageService) GetPresignedUploadURL(ctx context.Context, storagePath string, contentType string, expirySeconds int) (string, error) {
 	expiry := time.Duration(expirySeconds) * time.Second
-	url, err := s.client.PresignedPutObject(ctx, s.bucketName, storagePath, expiry)
+	url, err := s.presignClient.PresignedPutObject(ctx, s.bucketName, storagePath, expiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned upload URL: %w", err)
 	}
