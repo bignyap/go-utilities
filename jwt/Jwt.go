@@ -455,99 +455,86 @@ func isIssuerAllowed(tokenIssuer string) bool {
 }
 
 func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
-	// Step 1: Parse the JWT token without verifying the signature
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
-	if err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("failed to parse token: %w", err)
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return jwt.MapClaims{}, fmt.Errorf("failed to parse claims")
-	}
-
-	// Step 2: Extract the issuer and then the realm from it
-	issuer, ok := claims["iss"].(string)
-	if !ok {
-		return jwt.MapClaims{}, fmt.Errorf("issuer (iss) not found in the token")
-	}
-
-	parsedUrl, err := url.Parse(issuer)
-	if err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("issuer (iss) not found in the token")
-	}
-
-	if !isIssuerAllowed(issuer) {
-		return jwt.MapClaims{}, fmt.Errorf("token issuer is not authorized")
-	}
-
-	realm, err := extractRealmFromPath(parsedUrl.Path)
-	if err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("realm not found in the issuer")
-	}
-	claims["realm"] = realm
-
-	// Validate audience format if present or if AUTH_AUDIENCE is specified
 	cfg := getConfig()
-	if audVal, exists := claims["aud"]; exists {
-		switch audVal.(type) {
-		case string, []interface{}, []string:
-			// valid audience type
-		default:
-			return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
-		}
-	} else if cfg.audience != "" {
-		return jwt.MapClaims{}, fmt.Errorf("audience (aud) not found in the token")
-	}
 
-	// Step 3: Get or fetch the JWK set
-	jwks, err := getJWKSet(issuer)
-	if err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("failed to get JWK set: %w", err)
-	}
-
-	// Get the kid from the unverified header
-	unverifiedHeader := token.Header
-	kid, ok := unverifiedHeader["kid"].(string)
-	if !ok {
-		return jwt.MapClaims{}, fmt.Errorf("kid not found in the token header")
-	}
-
-	// Find the corresponding key
-	key, found := jwks.LookupKeyID(kid)
-	if !found {
-		// Attempt cache refresh in case key rotation occurred
-		cacheKey := normalizeIssuer(issuer)
-		certCache.Delete(cacheKey)
-		if refreshedJWKS, refErr := getJWKSet(issuer); refErr == nil {
-			jwks = refreshedJWKS
-			key, found = jwks.LookupKeyID(kid)
-		}
-		if !found {
-			return jwt.MapClaims{}, fmt.Errorf("key ID not found in the certificate endpoint")
-		}
-	}
-
-	// Extract the public key
-	var pubKey rsa.PublicKey
-	if err := key.Raw(&pubKey); err != nil {
-		return jwt.MapClaims{}, fmt.Errorf("failed to parse public key: %w", err)
-	}
-
-	// Step 4: Verify the signature
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"RS256"}),
-		jwt.WithIssuer(issuer),
 		jwt.WithLeeway(1 * time.Minute),
 	}
 	if cfg.audience != "" {
 		opts = append(opts, jwt.WithAudience(cfg.audience))
 	}
 
+	claims := jwt.MapClaims{}
 	parsedToken, err := jwt.ParseWithClaims(
 		tokenString,
-		jwt.MapClaims{},
+		claims,
 		func(token *jwt.Token) (interface{}, error) {
+			tokenClaims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				return nil, fmt.Errorf("failed to parse claims")
+			}
+
+			// Extract the issuer and check if authorized
+			issuer, ok := tokenClaims["iss"].(string)
+			if !ok || issuer == "" {
+				return nil, fmt.Errorf("issuer (iss) not found in the token")
+			}
+
+			parsedUrl, err := url.Parse(issuer)
+			if err != nil || parsedUrl.Host == "" {
+				return nil, fmt.Errorf("issuer (iss) not found in the token")
+			}
+
+			if !isIssuerAllowed(issuer) {
+				return nil, fmt.Errorf("token issuer is not authorized")
+			}
+
+			// Validate audience format if present or if AUTH_AUDIENCE is specified
+			if audVal, exists := tokenClaims["aud"]; exists {
+				switch audVal.(type) {
+				case string, []interface{}, []string:
+					// valid audience type
+				default:
+					return nil, fmt.Errorf("audience (aud) not found in the token")
+				}
+			} else if cfg.audience != "" {
+				return nil, fmt.Errorf("audience (aud) not found in the token")
+			}
+
+			// Extract kid from header
+			kid, ok := token.Header["kid"].(string)
+			if !ok || kid == "" {
+				return nil, fmt.Errorf("kid not found in the token header")
+			}
+
+			// Get or fetch the JWK set
+			jwks, err := getJWKSet(issuer)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get JWK set: %w", err)
+			}
+
+			// Find corresponding key
+			key, found := jwks.LookupKeyID(kid)
+			if !found {
+				// Attempt cache refresh in case key rotation occurred
+				cacheKey := normalizeIssuer(issuer)
+				certCache.Delete(cacheKey)
+				if refreshedJWKS, refErr := getJWKSet(issuer); refErr == nil {
+					jwks = refreshedJWKS
+					key, found = jwks.LookupKeyID(kid)
+				}
+				if !found {
+					return nil, fmt.Errorf("key ID not found in the certificate endpoint")
+				}
+			}
+
+			// Extract public key
+			var pubKey rsa.PublicKey
+			if err := key.Raw(&pubKey); err != nil {
+				return nil, fmt.Errorf("failed to parse public key: %w", err)
+			}
+
 			return &pubKey, nil
 		},
 		opts...,
@@ -559,6 +546,15 @@ func ParseAndVerifyJWT(tokenString string) (jwt.MapClaims, error) {
 	if !parsedToken.Valid {
 		return jwt.MapClaims{}, fmt.Errorf("invalid token")
 	}
+
+	// Extract realm and populate in claims for callers
+	issuer, _ := claims["iss"].(string)
+	parsedUrl, _ := url.Parse(issuer)
+	realm, err := extractRealmFromPath(parsedUrl.Path)
+	if err != nil {
+		return jwt.MapClaims{}, fmt.Errorf("realm not found in the issuer")
+	}
+	claims["realm"] = realm
 
 	return claims, nil
 }
