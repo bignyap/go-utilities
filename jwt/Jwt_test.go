@@ -444,76 +444,49 @@ func TestParseAndVerifyJWT_ArrayAudience(t *testing.T) {
 	}
 }
 
-func TestResolveJWKSFetchURL(t *testing.T) {
+func TestFindInternalAuthURL(t *testing.T) {
 	tests := []struct {
 		name            string
-		issuer          string
+		issuerPath      string
 		authURL         string
 		keycloakBaseURL string
-		customJWKS      string
 		wantBase        string
-		wantEndpoint    string
 	}{
 		{
-			name:         "Explicit AUTH_JWKS_URL override",
-			issuer:       "http://localhost:8180/auth/realms/kgb",
-			customJWKS:   "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
-			wantBase:     "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
-			wantEndpoint: "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+			name:       "Internal AUTH_URL matching realm",
+			issuerPath: "/auth/realms/kgb",
+			authURL:    "http://keycloak:8080/auth/realms/kgb,http://localhost:8180/auth/realms/kgb",
+			wantBase:   "http://keycloak:8080/auth/realms/kgb",
 		},
 		{
-			name:         "Loopback issuer with internal AUTH_URL matching realm",
-			issuer:       "http://localhost:8180/auth/realms/kgb",
-			authURL:      "http://keycloak:8080/auth/realms/kgb,http://localhost:8180/auth/realms/kgb",
-			wantBase:     "http://keycloak:8080/auth/realms/kgb",
-			wantEndpoint: "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
+			name:       "Multiple internal candidates selecting matching realm",
+			issuerPath: "/auth/realms/special",
+			authURL:    "http://keycloak:8080/auth/realms/other,http://keycloak:8080/auth/realms/special",
+			wantBase:   "http://keycloak:8080/auth/realms/special",
 		},
 		{
-			name:         "Loopback issuer with multiple internal candidates selecting matching realm",
-			issuer:       "http://localhost:8180/auth/realms/special",
-			authURL:      "http://keycloak:8080/auth/realms/other,http://keycloak:8080/auth/realms/special",
-			wantBase:     "http://keycloak:8080/auth/realms/special",
-			wantEndpoint: "http://keycloak:8080/auth/realms/special/protocol/openid-connect/certs",
-		},
-		{
-			name:            "Loopback issuer fallback to KEYCLOAK_BASE_URL",
-			issuer:          "http://localhost:8180/auth/realms/kgb",
+			name:            "Fallback to KEYCLOAK_BASE_URL",
+			issuerPath:      "/auth/realms/kgb",
 			authURL:         "http://localhost:8180/auth/realms/kgb",
 			keycloakBaseURL: "http://keycloak:8080/auth/",
 			wantBase:        "http://keycloak:8080/auth/realms/kgb",
-			wantEndpoint:    "http://keycloak:8080/auth/realms/kgb/protocol/openid-connect/certs",
 		},
 		{
-			name:         "Non-loopback issuer preserved",
-			issuer:       "https://auth.example.com/realms/kgb",
-			authURL:      "http://keycloak:8080/auth/realms/kgb",
-			wantBase:     "https://auth.example.com/realms/kgb",
-			wantEndpoint: "https://auth.example.com/realms/kgb/protocol/openid-connect/certs",
-		},
-		{
-			name:         "Loopback issuer with loopback AUTH_URL remains loopback",
-			issuer:       "http://localhost:8180/auth/realms/kgb",
-			authURL:      "http://localhost:8180/auth/realms/kgb,http://127.0.0.1:8180/auth/realms/kgb",
-			wantBase:     "http://localhost:8180/auth/realms/kgb",
-			wantEndpoint: "http://localhost:8180/auth/realms/kgb/protocol/openid-connect/certs",
+			name:       "Only loopback entries in AUTH_URL returns empty string",
+			issuerPath: "/auth/realms/kgb",
+			authURL:    "http://localhost:8180/auth/realms/kgb,http://127.0.0.1:8180/auth/realms/kgb",
+			wantBase:   "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("AUTH_JWKS_URL", tt.customJWKS)
 			t.Setenv("AUTH_URL", tt.authURL)
 			t.Setenv("KEYCLOAK_BASE_URL", tt.keycloakBaseURL)
 
-			gotBase, gotEndpoint, err := resolveJWKSFetchURL(tt.issuer)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			gotBase := findInternalAuthURL(tt.issuerPath)
 			if gotBase != tt.wantBase {
 				t.Errorf("base mismatch: got %q, want %q", gotBase, tt.wantBase)
-			}
-			if gotEndpoint != tt.wantEndpoint {
-				t.Errorf("endpoint mismatch: got %q, want %q", gotEndpoint, tt.wantEndpoint)
 			}
 		})
 	}
